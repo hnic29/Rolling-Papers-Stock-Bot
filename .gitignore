@@ -1,4 +1,5 @@
 .env
+data/trade_log.db
 .venv/
 __pycache__/
 *.py[cod]

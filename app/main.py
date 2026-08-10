@@ -1,3 +1,5 @@
+from alpaca.common.enums import Sort
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -6,15 +8,51 @@ from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import reload_settings
-from app.models import AppSettingsResponse, AppSettingsUpdate, AutoScannerRequest, BotStatus, PullbackSetup, ScannerRequest, TradeRequest
+from app.models import (
+    AppSettingsResponse,
+    AppSettingsUpdate,
+    AutoScannerRequest,
+    BacktestRequest,
+    BotStatus,
+    PullbackSetup,
+    ScannerRequest,
+    TradeRequest,
+)
 from app.paths import resource_path
+from app.services import trade_log
+from app.services.backtest import run_backtest
 from app.services.bot import bot
 from app.services.env_file import mask_secret, read_env, write_env
 from app.services.scanner import MarketScanner
 
-app = FastAPI(title="Stockbot", version="0.1.0")
+app = FastAPI(title="Rolling Papers Bot", version="0.1.0")
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 scanner = MarketScanner()
+MAX_BARS_LIMIT = 5000
+
+# Longer-range chart presets: (bar timeframe, lookback in calendar days). YTD is handled separately.
+RANGE_PRESETS: dict[str, tuple[TimeFrame, int]] = {
+    "1M": (TimeFrame.Day, 45),
+    "6M": (TimeFrame.Day, 200),
+    "1Y": (TimeFrame.Day, 400),
+    "5Y": (TimeFrame(1, TimeFrameUnit.Week), 5 * 365 + 30),
+    "10Y": (TimeFrame(1, TimeFrameUnit.Week), 10 * 365 + 30),
+    "ALL": (TimeFrame(1, TimeFrameUnit.Month), 25 * 365),
+}
+
+
+def crypto_pair(symbol: str) -> str:
+    return symbol.upper().replace("-", "/")
+
+
+def resolve_period(period: str, now: datetime) -> tuple[TimeFrame, datetime]:
+    period = period.upper()
+    if period == "YTD":
+        return TimeFrame.Day, datetime(now.year, 1, 1, tzinfo=UTC)
+    if period not in RANGE_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown period '{period}'. Use one of: YTD, {', '.join(RANGE_PRESETS)}.")
+    timeframe, lookback_days = RANGE_PRESETS[period]
+    return timeframe, now - timedelta(days=lookback_days)
 
 
 @app.get("/")
@@ -24,7 +62,7 @@ def index():
 
 @app.get("/api/status", response_model=BotStatus)
 def status():
-    return bot.status
+    return bot.refresh_status()
 
 
 @app.get("/api/settings", response_model=AppSettingsResponse)
@@ -113,6 +151,53 @@ def account():
     }
 
 
+@app.get("/api/positions")
+def positions():
+    try:
+        return {"positions": AlpacaBroker().positions_as_dicts()}
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca positions: {exc}") from exc
+
+
+@app.get("/api/portfolio/history")
+def portfolio_history(period: str = "1D", timeframe: str = "5Min"):
+    try:
+        return AlpacaBroker().portfolio_history(period=period, timeframe=timeframe)
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca portfolio history: {exc}") from exc
+
+
+@app.get("/api/trades/history")
+def trade_history(limit: int = 50):
+    return {"trades": trade_log.list_trades(limit=min(max(limit, 1), 500))}
+
+
+@app.post("/api/trades/history/sync")
+def sync_trade_history():
+    try:
+        broker = AlpacaBroker()
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    for order_id in trade_log.pending_order_ids():
+        try:
+            order = broker.get_order(order_id)
+        except Exception:
+            continue
+        trade_log.update_fill(
+            order_id=order_id,
+            status=str(order.status.value if hasattr(order.status, "value") else order.status),
+            filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price is not None else None,
+            filled_qty=float(order.filled_qty) if order.filled_qty is not None else None,
+            filled_at=order.filled_at.isoformat() if order.filled_at is not None else None,
+        )
+    return {"trades": trade_log.list_trades(limit=50)}
+
+
 @app.get("/api/quote/{symbol}")
 def quote(symbol: str):
     try:
@@ -124,21 +209,84 @@ def quote(symbol: str):
 
 
 @app.get("/api/bars/{symbol}")
-def bars(symbol: str, limit: int = 120, trading_date: date | None = None):
+def bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: int | None = None, period: str | None = None):
     try:
+        sort = Sort.ASC
+        timeframe = TimeFrame.Minute
         if trading_date:
             market_tz = ZoneInfo("America/New_York")
             start = datetime.combine(trading_date, time(9, 30), tzinfo=market_tz).astimezone(UTC)
             end = datetime.combine(trading_date, time(16, 0), tzinfo=market_tz).astimezone(UTC)
             limit = min(max(limit, 1), 390)
+        elif period:
+            end = datetime.now(UTC)
+            timeframe, start = resolve_period(period, end)
+            limit = MAX_BARS_LIMIT
+        elif days:
+            days = min(max(days, 1), 30)
+            end = datetime.now(UTC)
+            start = end - timedelta(days=days + 5)
+            limit = min(max(limit, 1), days * 390, MAX_BARS_LIMIT)
+            sort = Sort.DESC
         else:
             end = datetime.now(UTC)
             start = end - timedelta(days=7)
-        return {"symbol": symbol.upper(), "bars": AlpacaBroker().minute_bars(symbol, start=start, end=end, limit=limit)}
+        return {
+            "symbol": symbol.upper(),
+            "bars": AlpacaBroker().historical_bars(symbol, start=start, end=end, limit=limit, sort=sort, timeframe=timeframe),
+        }
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca bars for {symbol.upper()}: {exc}") from exc
+
+
+@app.get("/api/crypto/quote/{symbol}")
+def crypto_quote(symbol: str):
+    pair = crypto_pair(symbol)
+    try:
+        return AlpacaBroker().crypto_latest_quote(pair)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca bars for {symbol.upper()}: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca crypto quote for {pair}: {exc}") from exc
+
+
+@app.get("/api/crypto/bars/{symbol}")
+def crypto_bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: int | None = None, period: str | None = None):
+    pair = crypto_pair(symbol)
+    try:
+        sort = Sort.ASC
+        timeframe = TimeFrame.Minute
+        if trading_date:
+            start = datetime.combine(trading_date, time.min, tzinfo=UTC)
+            end = datetime.combine(trading_date, time.max, tzinfo=UTC)
+            limit = min(max(limit, 1), 1440)
+        elif period:
+            end = datetime.now(UTC)
+            timeframe, start = resolve_period(period, end)
+            limit = MAX_BARS_LIMIT
+        elif days:
+            days = min(max(days, 1), 30)
+            end = datetime.now(UTC)
+            start = end - timedelta(days=days)
+            limit = min(max(limit, 1), days * 1440, MAX_BARS_LIMIT)
+            sort = Sort.DESC
+        else:
+            end = datetime.now(UTC)
+            start = end - timedelta(days=1)
+        return {
+            "symbol": pair,
+            "bars": AlpacaBroker().crypto_bars(pair, start=start, end=end, limit=limit, sort=sort, timeframe=timeframe),
+        }
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca crypto bars for {pair}: {exc}") from exc
 
 
 @app.post("/api/trade")
@@ -147,3 +295,21 @@ def trade(request: TradeRequest):
         return bot.submit_trade(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/backtest")
+def backtest(request: BacktestRequest):
+    try:
+        return run_backtest(
+            request.symbol,
+            request.start,
+            request.end,
+            starting_capital=request.starting_capital,
+            position_value=request.position_value,
+        )
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Backtest failed: {exc}") from exc

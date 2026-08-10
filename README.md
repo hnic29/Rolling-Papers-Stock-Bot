@@ -1,4 +1,4 @@
-# Stockbot
+# Rolling Papers Bot
 
 Paper-first day-trading bot scaffold using FastAPI and Alpaca.
 
@@ -29,13 +29,13 @@ Open `http://127.0.0.1:8000`.
 Install dependencies, then run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --name Stockbot --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
+.\.venv\Scripts\python.exe -m PyInstaller --name "Rolling Papers Bot" --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
 ```
 
 The executable is created at:
 
 ```text
-dist\Stockbot.exe
+dist\Rolling Papers Bot.exe
 ```
 
 Keep a local `.env` file next to the executable or run it from the project folder so API keys stay outside the bundled app.

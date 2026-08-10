@@ -1,3 +1,4 @@
+from datetime import date
 from enum import Enum
 
 from pydantic import BaseModel
@@ -16,14 +17,16 @@ class BotStatus(BaseModel):
     last_signal: Signal = Signal.hold
     last_message: str = "Idle"
     trades_today: int = 0
-    realized_pnl_today: float = 0.0
+    daily_pnl: float = 0.0
 
 
 class TradeRequest(BaseModel):
     symbol: str
-    qty: int
+    qty: float
     side: Signal
     estimated_price: float | None = None
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
 
 
 class Candle(BaseModel):
@@ -117,3 +120,11 @@ class AppSettingsUpdate(BaseModel):
     alpaca_paper: bool = True
     fmp_api_key: str = ""
     allow_live_trading: bool = False
+
+
+class BacktestRequest(BaseModel):
+    symbol: str
+    start: date
+    end: date
+    starting_capital: float = 10000.0
+    position_value: float = 1000.0

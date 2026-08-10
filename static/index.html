@@ -3,17 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stockbot</title>
+    <title>Rolling Papers Bot</title>
+    <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div class="aurora-bg" aria-hidden="true">
+      <div class="stars"></div>
+      <div class="aurora-band aurora-1"></div>
+      <div class="aurora-band aurora-2"></div>
+      <div class="aurora-band aurora-3"></div>
+    </div>
     <main class="shell">
       <section class="topbar">
-        <div>
-          <h1>Stockbot</h1>
+        <div class="brand">
+          <h1><img src="/static/img/logo.png" class="logo" alt="Rolling Papers Bot" /></h1>
           <p id="message">Loading...</p>
         </div>
+        <div class="asset-class-toggle" id="asset-class-toggle">
+          <button type="button" class="asset-btn active" data-asset="stock">Stocks</button>
+          <button type="button" class="asset-btn" data-asset="crypto">Crypto</button>
+        </div>
         <div class="actions">
+          <button id="open-wizard" type="button">Getting Started</button>
           <button id="start">Start</button>
           <button id="stop">Stop</button>
           <button id="tick">Run Tick</button>
@@ -22,12 +34,25 @@
 
       <nav class="tabs">
         <button class="tab active" data-view="dashboard">Dashboard</button>
+        <button class="tab" data-view="backtest">Backtest</button>
         <button class="tab" data-view="settings">Settings</button>
       </nav>
 
       <section id="dashboard-view" class="grid view active">
-        <article class="panel">
-          <h2>Status</h2>
+        <nav class="section-nav" id="section-nav" aria-label="Jump to section">
+          <a class="section-nav-link" href="#section-status">Status</a>
+          <a class="section-nav-link" href="#section-clock">Clock</a>
+          <a class="section-nav-link" href="#section-order">Order</a>
+          <a class="section-nav-link" href="#section-ticker">Ticker</a>
+          <a class="section-nav-link" href="#section-chart">Chart</a>
+          <a class="section-nav-link" href="#section-positions">Positions</a>
+          <a class="section-nav-link" href="#section-performance">Performance</a>
+          <a class="section-nav-link" href="#section-history">History</a>
+          <a class="section-nav-link" href="#section-scanner">Scanner</a>
+        </nav>
+
+        <article class="panel" id="section-status">
+          <h2>Status <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
           <dl>
             <dt>Mode</dt><dd id="mode">-</dd>
             <dt>Running</dt><dd id="running">-</dd>
@@ -38,11 +63,23 @@
           </dl>
         </article>
 
-        <article class="panel">
+        <article class="panel" id="section-clock">
+          <h2>Market Clock</h2>
+          <dl>
+            <dt>Local time</dt><dd id="clock-local">-</dd>
+            <dt>Market time (ET)</dt><dd id="clock-market">-</dd>
+            <dt>Market status</dt><dd id="market-status">-</dd>
+            <dt>Opens in</dt><dd id="market-open-countdown">-</dd>
+            <dt>Closes in</dt><dd id="market-close-countdown">-</dd>
+          </dl>
+          <p class="chart-hint">NYSE regular hours, 9:30 AM-4:00 PM ET, Mon-Fri. Does not account for market holidays.</p>
+        </article>
+
+        <article class="panel" id="section-order">
           <h2>Manual Paper Order</h2>
           <form id="trade-form">
             <label>Symbol <input name="symbol" value="AAPL" /></label>
-            <label>Qty <input name="qty" type="number" min="1" value="1" /></label>
+            <label>Qty <input name="qty" type="number" min="0.0001" step="any" value="1" /></label>
             <label>Est. price <input name="estimated_price" type="number" min="0" step="0.01" /></label>
             <label>Side
               <select name="side">
@@ -50,12 +87,15 @@
                 <option value="sell">Sell</option>
               </select>
             </label>
+            <label>Stop loss <input name="stop_loss_price" type="number" min="0" step="0.01" placeholder="optional" /></label>
+            <label>Take profit <input name="take_profit_price" type="number" min="0" step="0.01" placeholder="optional" /></label>
             <button type="submit">Submit</button>
           </form>
+          <p class="chart-hint">Stop loss / take profit apply to stocks only, and require a whole-share quantity.</p>
         </article>
 
-        <article class="panel ticker-panel">
-          <h2>Alpaca Ticker</h2>
+        <article class="panel ticker-panel" id="section-ticker">
+          <h2>Alpaca Ticker <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
           <form id="quote-form" class="ticker-form">
             <label>Symbol <input name="symbol" value="AAPL" /></label>
             <button type="submit">Refresh</button>
@@ -68,21 +108,120 @@
           </div>
         </article>
 
-        <article class="panel chart-panel">
+        <article class="panel chart-panel" id="section-chart">
           <div class="chart-header">
             <h2>Candlestick Chart</h2>
             <div class="chart-controls">
+              <div class="range-buttons" id="range-buttons">
+                <button type="button" class="range-btn active" data-days="1">1D</button>
+                <button type="button" class="range-btn" data-days="5">5D</button>
+                <button type="button" class="range-btn" data-days="10">10D</button>
+                <button type="button" class="range-btn" data-period="1M">1M</button>
+                <button type="button" class="range-btn" data-period="6M">6M</button>
+                <button type="button" class="range-btn" data-period="YTD">YTD</button>
+                <button type="button" class="range-btn" data-period="1Y">1Y</button>
+                <button type="button" class="range-btn" data-period="5Y">5Y</button>
+                <button type="button" class="range-btn" data-period="10Y">10Y</button>
+                <button type="button" class="range-btn" data-period="ALL">All</button>
+              </div>
               <label>Date <input id="chart-date" type="date" /></label>
               <button id="refresh-chart" type="button">Refresh Chart</button>
+              <button id="reset-zoom" type="button">Reset Zoom</button>
             </div>
           </div>
+          <div class="drawing-toolbar" id="drawing-toolbar">
+            <button type="button" class="draw-btn active" data-tool="cursor" title="Pan / hover">Cursor</button>
+            <button type="button" class="draw-btn" data-tool="trendline" title="Trend line">Trend Line</button>
+            <button type="button" class="draw-btn" data-tool="horizontal" title="Horizontal support/resistance line">Horizontal</button>
+            <button type="button" class="draw-btn" data-tool="fib" title="Fibonacci retracement">Fibonacci</button>
+            <button type="button" class="draw-btn" data-tool="channel" title="Parallel channel">Channel</button>
+            <button type="button" class="draw-btn" data-tool="rectangle" title="Rectangle zone">Rectangle</button>
+            <button type="button" class="draw-btn" data-tool="text" title="Text annotation">Text</button>
+            <button type="button" class="draw-btn" data-tool="erase" title="Click a drawing to remove it">Erase</button>
+            <button type="button" id="clear-drawings" title="Remove all drawings for this symbol">Clear All</button>
+          </div>
+          <p class="chart-hint" id="chart-hint">Scroll to zoom, drag to pan, double-click to reset zoom.</p>
           <div class="chart-wrap">
             <canvas id="candlestick-chart" width="1040" height="360"></canvas>
             <div id="chart-tooltip" class="chart-tooltip" hidden></div>
           </div>
         </article>
 
-        <article class="panel scanner-panel">
+        <article class="panel positions-panel" id="section-positions">
+          <div class="chart-header">
+            <h2>Positions <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
+            <button id="refresh-positions" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Avg Entry</th>
+                  <th>Current</th>
+                  <th>Market Value</th>
+                  <th>P&amp;L $</th>
+                  <th>P&amp;L %</th>
+                  <th>Today</th>
+                </tr>
+              </thead>
+              <tbody id="positions-results">
+                <tr><td colspan="9">No open positions yet — place a trade to see it here.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel performance-panel" id="section-performance">
+          <div class="chart-header">
+            <h2>Performance <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
+            <div class="range-buttons" id="performance-range-buttons">
+              <button type="button" class="range-btn" data-period="1D" data-timeframe="15Min">1D</button>
+              <button type="button" class="range-btn active" data-period="1W" data-timeframe="1H">1W</button>
+              <button type="button" class="range-btn" data-period="1M" data-timeframe="1D">1M</button>
+            </div>
+          </div>
+          <div class="performance-summary">
+            <div><span>Equity</span><strong id="perf-equity">-</strong></div>
+            <div><span>Change</span><strong id="perf-change">-</strong></div>
+            <div><span>Change %</span><strong id="perf-change-pct">-</strong></div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="performance-chart" width="1040" height="240"></canvas>
+          </div>
+        </article>
+
+        <article class="panel history-panel" id="section-history">
+          <div class="chart-header">
+            <h2>Trade History</h2>
+            <button id="sync-trade-history" type="button">Refresh</button>
+          </div>
+          <p class="chart-hint">Every order this app has submitted, kept locally so it doesn't age out of view. "Refresh" checks pending orders for fills.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Submitted</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                  <th>Stop Loss</th>
+                  <th>Take Profit</th>
+                  <th>Filled Price</th>
+                  <th>Filled At</th>
+                </tr>
+              </thead>
+              <tbody id="trade-history-results">
+                <tr><td colspan="9">No trades submitted yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel scanner-panel" id="section-scanner">
           <h2>Market Scanner</h2>
           <form id="scanner-form" class="scanner-form">
             <label>Symbols <input name="symbols" value="AAPL, TSLA, NVDA, AMD, PLTR" /></label>
@@ -112,6 +251,68 @@
         </article>
       </section>
 
+      <section id="backtest-view" class="view">
+        <article class="panel">
+          <h2>Backtest Sandbox</h2>
+          <p>Replays the real pullback strategy against actual historical minute-by-minute price data from Alpaca — no real or paper orders are placed, nothing here touches your live account, positions, or trade history.</p>
+          <p class="chart-hint">
+            Two honest limits: historical news and float-share data aren't available, so those two of the five stock-selection
+            criteria never score here (a live scan may flag a stock this backtest wouldn't). And Alpaca's free data feed
+            typically only goes back to around 2020 — "past years" means whatever's actually available, not decades of history.
+            Each run is capped at a 2-year range to keep it running in a reasonable time.
+          </p>
+        </article>
+
+        <article class="panel">
+          <h2>Run a Backtest</h2>
+          <form id="backtest-form">
+            <label>Symbol <input name="symbol" value="AAPL" /></label>
+            <label>Start date <input name="start" type="date" required /></label>
+            <label>End date <input name="end" type="date" required /></label>
+            <label>Starting capital <input name="starting_capital" type="number" min="100" step="100" value="10000" /></label>
+            <label>Position size ($) <input name="position_value" type="number" min="10" step="10" value="1000" /></label>
+            <button type="submit" id="run-backtest">Run Backtest</button>
+          </form>
+          <p class="chart-hint" id="backtest-status"></p>
+        </article>
+
+        <article class="panel" id="backtest-results" hidden>
+          <h2>Results</h2>
+          <div class="performance-summary" id="backtest-summary">
+            <div><span>Ending Equity</span><strong id="bt-equity">-</strong></div>
+            <div><span>Total Return</span><strong id="bt-return">-</strong></div>
+            <div><span>Trades</span><strong id="bt-trades">-</strong></div>
+            <div><span>Win Rate</span><strong id="bt-winrate">-</strong></div>
+            <div><span>Best Trade</span><strong id="bt-best">-</strong></div>
+            <div><span>Worst Trade</span><strong id="bt-worst">-</strong></div>
+            <div><span>Days Scanned</span><strong id="bt-scanned">-</strong></div>
+            <div><span>Days Qualified</span><strong id="bt-qualified">-</strong></div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="backtest-chart" width="1040" height="240"></canvas>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Entry Time</th>
+                  <th>Entry Price</th>
+                  <th>Exit Time</th>
+                  <th>Exit Price</th>
+                  <th>Qty</th>
+                  <th>P&amp;L $</th>
+                  <th>P&amp;L %</th>
+                  <th>Exit Reason</th>
+                </tr>
+              </thead>
+              <tbody id="backtest-trades">
+                <tr><td colspan="8">No trades yet — run a backtest above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
       <section id="settings-view" class="view">
         <article class="panel settings-panel">
           <h2>API Settings</h2>
@@ -126,6 +327,27 @@
         </article>
       </section>
     </main>
+
+    <div class="wizard-overlay" id="wizard-overlay" hidden>
+      <div class="wizard-modal" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+        <button type="button" class="wizard-close" id="wizard-close" aria-label="Close">&times;</button>
+        <div class="wizard-steps" id="wizard-dots"></div>
+        <h2 id="wizard-title">-</h2>
+        <div class="wizard-body" id="wizard-body">-</div>
+        <div class="wizard-nav">
+          <label class="wizard-dont-show">
+            <input type="checkbox" id="wizard-dont-show" /> Don't show this automatically again
+          </label>
+          <div class="wizard-buttons">
+            <button type="button" id="wizard-back">Back</button>
+            <button type="button" id="wizard-next">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="/static/app.js"></script>
+
+
   </body>
 </html>

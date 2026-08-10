@@ -1,6 +1,6 @@
-# Stockbot Feature Guide
+# Rolling Papers Bot Feature Guide
 
-Stockbot is a paper-first day-trading bot and dashboard. It is currently built for learning, testing, and paper execution before any live-trading work is enabled.
+Rolling Papers Bot is a paper-first day-trading bot and dashboard. It is currently built for learning, testing, and paper execution before any live-trading work is enabled.
 
 This is not financial advice. Do not use live trading until the strategy, data feeds, logs, risk limits, and broker behavior have been tested thoroughly.
 
@@ -306,13 +306,13 @@ The app can be bundled as a Windows executable. The executable starts the local 
 Build it with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --name Stockbot --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
+.\.venv\Scripts\python.exe -m PyInstaller --name "Rolling Papers Bot" --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
 ```
 
 Output:
 
 ```text
-dist\Stockbot.exe
+dist\Rolling Papers Bot.exe
 ```
 
 The `.env` file is intentionally not bundled. Keep `.env` outside the executable so Alpaca and FMP keys stay private.
