@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import ScannerResponse, ScannerResult, Signal, StockCandidate
+from app.paths import resource_path
 from app.services.fmp import FmpClient
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
@@ -11,8 +12,8 @@ from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 class MarketScanner:
     def __init__(self) -> None:
         self.strategy = SmallAccountPullbackStrategy()
-        self.universe_path = Path("data/stock_universe.txt")
-        self.metadata_path = Path("data/symbol_metadata.csv")
+        self.universe_path = resource_path("data/stock_universe.txt")
+        self.metadata_path = resource_path("data/symbol_metadata.csv")
         self.fmp = FmpClient()
 
     def scan(self, symbols: list[str]) -> ScannerResponse:

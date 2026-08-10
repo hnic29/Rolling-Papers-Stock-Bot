@@ -20,7 +20,12 @@
         </div>
       </section>
 
-      <section class="grid">
+      <nav class="tabs">
+        <button class="tab active" data-view="dashboard">Dashboard</button>
+        <button class="tab" data-view="settings">Settings</button>
+      </nav>
+
+      <section id="dashboard-view" class="grid view active">
         <article class="panel">
           <h2>Status</h2>
           <dl>
@@ -104,6 +109,20 @@
               </tbody>
             </table>
           </div>
+        </article>
+      </section>
+
+      <section id="settings-view" class="view">
+        <article class="panel settings-panel">
+          <h2>API Settings</h2>
+          <form id="settings-form" class="settings-form">
+            <label>Alpaca API Key <input name="alpaca_api_key" autocomplete="off" /></label>
+            <label>Alpaca Secret Key <input name="alpaca_secret_key" type="password" autocomplete="off" /></label>
+            <label>FMP API Key <input name="fmp_api_key" type="password" autocomplete="off" /></label>
+            <label class="check-row"><input name="alpaca_paper" type="checkbox" checked /> Alpaca paper trading</label>
+            <label class="check-row"><input name="allow_live_trading" type="checkbox" /> Allow live trading</label>
+            <button type="submit">Save Settings</button>
+          </form>
         </article>
       </section>
     </main>

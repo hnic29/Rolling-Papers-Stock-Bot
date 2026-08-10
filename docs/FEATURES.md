@@ -70,6 +70,8 @@ ALPACA_SECRET_KEY=your_paper_secret
 ALPACA_PAPER=true
 ```
 
+You can also configure keys from the dashboard `Settings` tab. Saved settings are written to `.env`; secret values are masked when displayed back in the browser.
+
 ### Manual Paper Orders
 
 Manual order submission is available through the dashboard and API:
@@ -296,6 +298,24 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
+
+## Windows Executable
+
+The app can be bundled as a Windows executable. The executable starts the local server and opens the dashboard in your default browser.
+
+Build it with:
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --name Stockbot --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
+```
+
+Output:
+
+```text
+dist\Stockbot.exe
+```
+
+The `.env` file is intentionally not bundled. Keep `.env` outside the executable so Alpaca and FMP keys stay private.
 
 ## Testing
 

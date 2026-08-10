@@ -101,3 +101,19 @@ class ScannerResult(BaseModel):
 
 class ScannerResponse(BaseModel):
     results: list[ScannerResult]
+
+
+class AppSettingsResponse(BaseModel):
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    alpaca_paper: bool = True
+    fmp_api_key: str = ""
+    allow_live_trading: bool = False
+
+
+class AppSettingsUpdate(BaseModel):
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    alpaca_paper: bool = True
+    fmp_api_key: str = ""
+    allow_live_trading: bool = False

@@ -24,6 +24,22 @@ Start the app:
 
 Open `http://127.0.0.1:8000`.
 
+## Build Windows Executable
+
+Install dependencies, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --name Stockbot --onefile --add-data "static;static" --add-data "data;data" app\launcher.py
+```
+
+The executable is created at:
+
+```text
+dist\Stockbot.exe
+```
+
+Keep a local `.env` file next to the executable or run it from the project folder so API keys stay outside the bundled app.
+
 ## Safety Defaults
 
 - Paper trading is enabled by default.

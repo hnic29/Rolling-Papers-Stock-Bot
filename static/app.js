@@ -22,6 +22,21 @@ async function refresh() {
   render(await api("/api/status"));
 }
 
+function switchView(name) {
+  document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === `${name}-view`));
+  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
+}
+
+async function loadSettings() {
+  const settings = await api("/api/settings");
+  const form = document.querySelector("#settings-form");
+  form.alpaca_api_key.value = settings.alpaca_api_key;
+  form.alpaca_secret_key.value = settings.alpaca_secret_key;
+  form.fmp_api_key.value = settings.fmp_api_key;
+  form.alpaca_paper.checked = settings.alpaca_paper;
+  form.allow_live_trading.checked = settings.allow_live_trading;
+}
+
 function renderQuote(quote) {
   document.querySelector("#quote-bid").textContent = quote.bid_price ? `$${Number(quote.bid_price).toFixed(2)}` : "-";
   document.querySelector("#quote-ask").textContent = quote.ask_price ? `$${Number(quote.ask_price).toFixed(2)}` : "-";
@@ -226,6 +241,32 @@ async function autoScan() {
 document.querySelector("#start").addEventListener("click", async () => render(await api("/api/start", { method: "POST" })));
 document.querySelector("#stop").addEventListener("click", async () => render(await api("/api/stop", { method: "POST" })));
 document.querySelector("#tick").addEventListener("click", async () => render(await api("/api/tick", { method: "POST" })));
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", async () => {
+    switchView(tab.dataset.view);
+    if (tab.dataset.view === "settings") await loadSettings();
+  });
+});
+
+document.querySelector("#settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const settings = await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({
+      alpaca_api_key: form.alpaca_api_key.value,
+      alpaca_secret_key: form.alpaca_secret_key.value,
+      fmp_api_key: form.fmp_api_key.value,
+      alpaca_paper: form.alpaca_paper.checked,
+      allow_live_trading: form.allow_live_trading.checked,
+    }),
+  });
+  form.alpaca_api_key.value = settings.alpaca_api_key;
+  form.alpaca_secret_key.value = settings.alpaca_secret_key;
+  form.fmp_api_key.value = settings.fmp_api_key;
+  document.querySelector("#message").textContent = "Settings saved";
+});
 
 document.querySelector("#trade-form").addEventListener("submit", async (event) => {
   event.preventDefault();

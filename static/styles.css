@@ -52,6 +52,28 @@ form {
   gap: 10px;
 }
 
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tab {
+  background: rgba(4, 11, 19, 0.74);
+}
+
+.tab.active {
+  background: #0e5664;
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: grid;
+}
+
 button,
 input,
 select {
@@ -115,6 +137,26 @@ label {
 form {
   align-items: end;
   flex-wrap: wrap;
+}
+
+.settings-panel {
+  max-width: 760px;
+}
+
+.settings-form {
+  align-items: end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.check-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.check-row input {
+  min-height: auto;
 }
 
 .ticker-panel,
@@ -250,7 +292,8 @@ td {
 
 @media (max-width: 760px) {
   .topbar,
-  .grid {
+  .grid,
+  .view.active {
     display: block;
   }
 
@@ -270,5 +313,10 @@ td {
   .chart-header {
     align-items: stretch;
     display: grid;
+  }
+
+  .settings-form {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }

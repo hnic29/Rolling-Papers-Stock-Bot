@@ -4,5 +4,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 tmp/
+build/
+build_exe/
+dist/
+dist_exe/
+*.spec
 .DS_Store
 Thumbs.db

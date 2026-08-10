@@ -5,23 +5,56 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
-from app.models import AutoScannerRequest, BotStatus, PullbackSetup, ScannerRequest, TradeRequest
+from app.config import reload_settings
+from app.models import AppSettingsResponse, AppSettingsUpdate, AutoScannerRequest, BotStatus, PullbackSetup, ScannerRequest, TradeRequest
+from app.paths import resource_path
 from app.services.bot import bot
+from app.services.env_file import mask_secret, read_env, write_env
 from app.services.scanner import MarketScanner
 
 app = FastAPI(title="Stockbot", version="0.1.0")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 scanner = MarketScanner()
 
 
 @app.get("/")
 def index():
-    return FileResponse("static/index.html")
+    return FileResponse(resource_path("static/index.html"))
 
 
 @app.get("/api/status", response_model=BotStatus)
 def status():
     return bot.status
+
+
+@app.get("/api/settings", response_model=AppSettingsResponse)
+def get_settings():
+    values = read_env()
+    return AppSettingsResponse(
+        alpaca_api_key=mask_secret(values.get("ALPACA_API_KEY", "")),
+        alpaca_secret_key=mask_secret(values.get("ALPACA_SECRET_KEY", "")),
+        alpaca_paper=values.get("ALPACA_PAPER", "true").lower() == "true",
+        fmp_api_key=mask_secret(values.get("FMP_API_KEY", "")),
+        allow_live_trading=values.get("ALLOW_LIVE_TRADING", "false").lower() == "true",
+    )
+
+
+@app.post("/api/settings", response_model=AppSettingsResponse)
+def save_settings(request: AppSettingsUpdate):
+    updates = {
+        "ALPACA_PAPER": str(request.alpaca_paper).lower(),
+        "ALLOW_LIVE_TRADING": str(request.allow_live_trading).lower(),
+    }
+    if request.alpaca_api_key and "..." not in request.alpaca_api_key:
+        updates["ALPACA_API_KEY"] = request.alpaca_api_key.strip()
+    if request.alpaca_secret_key and "..." not in request.alpaca_secret_key:
+        updates["ALPACA_SECRET_KEY"] = request.alpaca_secret_key.strip()
+    if request.fmp_api_key and "..." not in request.fmp_api_key:
+        updates["FMP_API_KEY"] = request.fmp_api_key.strip()
+
+    write_env(updates)
+    reload_settings()
+    return get_settings()
 
 
 @app.post("/api/start", response_model=BotStatus)

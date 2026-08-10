@@ -17,3 +17,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def reload_settings() -> Settings:
+    global settings
+    settings = Settings()
+    return settings
