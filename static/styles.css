@@ -1,0 +1,274 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #05080f;
+  color: #eef6fb;
+}
+
+body {
+  background:
+    linear-gradient(180deg, rgba(5, 8, 15, 0.2), rgba(5, 8, 15, 0.78)),
+    url("/static/space-background.png") center / cover fixed no-repeat;
+  margin: 0;
+  min-height: 100vh;
+}
+
+.shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 32px auto;
+}
+
+.topbar {
+  align-items: center;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 34px;
+}
+
+h2 {
+  font-size: 18px;
+  margin-bottom: 18px;
+}
+
+p {
+  color: #b8c7d4;
+  margin-top: 6px;
+}
+
+.actions,
+form {
+  display: flex;
+  gap: 10px;
+}
+
+button,
+input,
+select {
+  border: 1px solid rgba(190, 213, 230, 0.44);
+  border-radius: 6px;
+  font: inherit;
+  min-height: 40px;
+  padding: 0 12px;
+}
+
+button {
+  background: #0e5664;
+  color: white;
+  cursor: pointer;
+}
+
+input,
+select {
+  background: rgba(4, 11, 19, 0.74);
+  color: #eef6fb;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.panel {
+  background: rgba(8, 16, 27, 0.78);
+  border: 1px solid rgba(190, 213, 230, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+  padding: 20px;
+}
+
+dl {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 140px 1fr;
+  margin: 0;
+}
+
+dt {
+  color: #a8b9c8;
+}
+
+dd {
+  font-weight: 700;
+  margin: 0;
+}
+
+label {
+  color: #b8c7d4;
+  display: grid;
+  flex: 1;
+  gap: 6px;
+}
+
+form {
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.ticker-panel,
+.chart-panel,
+.scanner-panel {
+  grid-column: 1 / -1;
+}
+
+.ticker-form,
+.scanner-form {
+  margin-bottom: 18px;
+}
+
+.ticker {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ticker div {
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.ticker span {
+  color: #a8b9c8;
+  display: block;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.ticker strong {
+  color: #ffffff;
+  display: block;
+  font-size: 22px;
+}
+
+.chart-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.chart-controls {
+  align-items: end;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chart-header h2 {
+  margin-bottom: 0;
+}
+
+.chart-wrap {
+  position: relative;
+}
+
+#candlestick-chart {
+  background: rgba(4, 11, 19, 0.5);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-radius: 6px;
+  display: block;
+  height: auto;
+  max-width: 100%;
+  width: 100%;
+}
+
+.chart-tooltip {
+  background: rgba(3, 8, 14, 0.94);
+  border: 1px solid rgba(190, 213, 230, 0.24);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  color: #eef6fb;
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  left: 0;
+  min-width: 150px;
+  padding: 10px;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 2;
+}
+
+.chart-tooltip strong {
+  font-size: 13px;
+}
+
+.chart-tooltip span {
+  color: #b8c7d4;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  min-width: 760px;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid rgba(190, 213, 230, 0.14);
+  padding: 12px 10px;
+  text-align: left;
+}
+
+th {
+  color: #a8b9c8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+td {
+  color: #eef6fb;
+}
+
+.up {
+  color: #7cf0b3;
+}
+
+.down {
+  color: #ff9b9b;
+}
+
+@media (max-width: 760px) {
+  .topbar,
+  .grid {
+    display: block;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    margin-top: 18px;
+  }
+
+  .panel + .panel {
+    margin-top: 16px;
+  }
+
+  .ticker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-header {
+    align-items: stretch;
+    display: grid;
+  }
+}

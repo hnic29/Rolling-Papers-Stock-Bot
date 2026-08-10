@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stockbot</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Stockbot</h1>
+          <p id="message">Loading...</p>
+        </div>
+        <div class="actions">
+          <button id="start">Start</button>
+          <button id="stop">Stop</button>
+          <button id="tick">Run Tick</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Status</h2>
+          <dl>
+            <dt>Mode</dt><dd id="mode">-</dd>
+            <dt>Running</dt><dd id="running">-</dd>
+            <dt>Symbol</dt><dd id="symbol">-</dd>
+            <dt>Last signal</dt><dd id="signal">-</dd>
+            <dt>Trades today</dt><dd id="trades">-</dd>
+            <dt>P&L today</dt><dd id="pnl">-</dd>
+          </dl>
+        </article>
+
+        <article class="panel">
+          <h2>Manual Paper Order</h2>
+          <form id="trade-form">
+            <label>Symbol <input name="symbol" value="AAPL" /></label>
+            <label>Qty <input name="qty" type="number" min="1" value="1" /></label>
+            <label>Est. price <input name="estimated_price" type="number" min="0" step="0.01" /></label>
+            <label>Side
+              <select name="side">
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+              </select>
+            </label>
+            <button type="submit">Submit</button>
+          </form>
+        </article>
+
+        <article class="panel ticker-panel">
+          <h2>Alpaca Ticker</h2>
+          <form id="quote-form" class="ticker-form">
+            <label>Symbol <input name="symbol" value="AAPL" /></label>
+            <button type="submit">Refresh</button>
+          </form>
+          <div class="ticker">
+            <div><span>Bid</span><strong id="quote-bid">-</strong></div>
+            <div><span>Ask</span><strong id="quote-ask">-</strong></div>
+            <div><span>Mid</span><strong id="quote-mid">-</strong></div>
+            <div><span>Updated</span><strong id="quote-time">-</strong></div>
+          </div>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="chart-header">
+            <h2>Candlestick Chart</h2>
+            <div class="chart-controls">
+              <label>Date <input id="chart-date" type="date" /></label>
+              <button id="refresh-chart" type="button">Refresh Chart</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="candlestick-chart" width="1040" height="360"></canvas>
+            <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+          </div>
+        </article>
+
+        <article class="panel scanner-panel">
+          <h2>Market Scanner</h2>
+          <form id="scanner-form" class="scanner-form">
+            <label>Symbols <input name="symbols" value="AAPL, TSLA, NVDA, AMD, PLTR" /></label>
+            <button type="submit">Scan</button>
+            <button id="auto-scan" type="button">Auto Scan</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Price</th>
+                  <th>Change</th>
+                  <th>Rel Vol</th>
+                  <th>Volume</th>
+                  <th>Float</th>
+                  <th>Catalyst</th>
+                  <th>Score</th>
+                  <th>Signal</th>
+                </tr>
+              </thead>
+              <tbody id="scanner-results">
+                <tr><td colspan="9">No scan yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
