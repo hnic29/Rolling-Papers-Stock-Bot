@@ -1043,11 +1043,12 @@ const TRADE_STATUS_CLASS = {
 function renderTradeHistory(trades) {
   const body = document.querySelector("#trade-history-results");
   if (!trades.length) {
-    body.innerHTML = `<tr><td colspan="9">No trades submitted yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12">No trades submitted yet.</td></tr>`;
     return;
   }
   body.innerHTML = trades.map((trade) => {
     const statusClass = TRADE_STATUS_CLASS[trade.status] || "";
+    const pnlClass = trade.realized_pnl === null || trade.realized_pnl === undefined ? "" : trade.realized_pnl >= 0 ? "up" : "down";
     return `
     <tr>
       <td>${new Date(trade.submitted_at).toLocaleString()}</td>
@@ -1059,6 +1060,9 @@ function renderTradeHistory(trades) {
       <td>${trade.take_profit_price !== null && trade.take_profit_price !== undefined ? `$${Number(trade.take_profit_price).toFixed(2)}` : "-"}</td>
       <td>${trade.filled_avg_price !== null ? `$${Number(trade.filled_avg_price).toFixed(2)}` : "-"}</td>
       <td>${trade.filled_at ? new Date(trade.filled_at).toLocaleString() : "-"}</td>
+      <td>${trade.exit_price !== null && trade.exit_price !== undefined ? `$${Number(trade.exit_price).toFixed(2)}` : "-"}</td>
+      <td>${trade.exit_reason ? escapeHtml(trade.exit_reason) : "-"}</td>
+      <td class="${pnlClass}">${trade.realized_pnl !== null && trade.realized_pnl !== undefined ? `$${Number(trade.realized_pnl).toFixed(2)}` : "-"}</td>
     </tr>
   `;
   }).join("");
@@ -1569,6 +1573,11 @@ startAutoRefresh(refresh, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPositions, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPerformance, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(() => refreshQuote(getTickerSymbol()), LIVE_REFRESH_INTERVAL_MS);
+
+// Trade history sync is heavier than the other polls above — it makes one Alpaca
+// call per still-open order to check for fills/exits — so it runs on a slower cadence.
+const TRADE_HISTORY_SYNC_INTERVAL_MS = 45000;
+startAutoRefresh(syncTradeHistory, TRADE_HISTORY_SYNC_INTERVAL_MS);
 
 document.querySelector("#open-wizard").addEventListener("click", openWizard);
 document.querySelector("#wizard-close").addEventListener("click", closeWizard);

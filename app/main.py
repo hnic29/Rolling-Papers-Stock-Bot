@@ -14,7 +14,6 @@ from app.models import (
     AutoScannerRequest,
     BacktestRequest,
     BotStatus,
-    PullbackSetup,
     ScannerRequest,
     TradeRequest,
 )
@@ -43,6 +42,11 @@ RANGE_PRESETS: dict[str, tuple[TimeFrame, int]] = {
 
 def crypto_pair(symbol: str) -> str:
     return symbol.upper().replace("-", "/")
+
+
+def _order_status_str(value) -> str:
+    """Alpaca SDK enums (order status, order type) stringify via .value; plain strings pass through."""
+    return str(value.value if hasattr(value, "value") else value)
 
 
 def resolve_period(period: str, now: datetime) -> tuple[TimeFrame, datetime]:
@@ -110,11 +114,6 @@ def tick():
     return bot.tick()
 
 
-@app.post("/api/strategy/evaluate")
-def evaluate_strategy(setup: PullbackSetup):
-    return bot.strategy.evaluate(setup)
-
-
 @app.post("/api/scanner")
 def scan_market(request: ScannerRequest):
     try:
@@ -141,6 +140,8 @@ def account():
         acct = AlpacaBroker().account()
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca account: {exc}") from exc
     return {
         "id": acct.id,
         "status": acct.status,
@@ -190,11 +191,38 @@ def sync_trade_history():
             continue
         trade_log.update_fill(
             order_id=order_id,
-            status=str(order.status.value if hasattr(order.status, "value") else order.status),
+            status=_order_status_str(order.status),
             filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price is not None else None,
             filled_qty=float(order.filled_qty) if order.filled_qty is not None else None,
             filled_at=order.filled_at.isoformat() if order.filled_at is not None else None,
         )
+
+    for trade in trade_log.trades_awaiting_exit():
+        try:
+            order = broker.get_order(trade["order_id"])
+        except Exception:
+            continue
+        filled_leg = next(
+            (leg for leg in (order.legs or []) if _order_status_str(leg.status) == "filled"),
+            None,
+        )
+        if filled_leg is None or filled_leg.filled_avg_price is None:
+            continue
+        exit_reason = "target" if _order_status_str(filled_leg.order_type) == "limit" else "stop"
+        exit_price = float(filled_leg.filled_avg_price)
+        exit_qty = float(filled_leg.filled_qty) if filled_leg.filled_qty is not None else trade["qty"]
+        entry_price = trade["filled_avg_price"] or 0.0
+        pnl = (exit_price - entry_price) * exit_qty if trade["side"] == "buy" else (entry_price - exit_price) * exit_qty
+        trade_log.record_exit(
+            order_id=trade["order_id"],
+            exit_order_id=str(filled_leg.id),
+            exit_price=exit_price,
+            exit_qty=exit_qty,
+            exit_at=filled_leg.filled_at.isoformat() if filled_leg.filled_at is not None else None,
+            exit_reason=exit_reason,
+            realized_pnl=round(pnl, 2),
+        )
+
     return {"trades": trade_log.list_trades(limit=50)}
 
 

@@ -29,11 +29,16 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
-    # Lightweight migration for databases created before stop/target tracking existed —
-    # CREATE TABLE IF NOT EXISTS is a no-op against an already-existing table.
-    for column in ("stop_loss_price", "take_profit_price"):
+    # Lightweight migration for databases created before stop/target or exit tracking
+    # existed — CREATE TABLE IF NOT EXISTS is a no-op against an already-existing table.
+    for column in ("stop_loss_price", "take_profit_price", "exit_price", "exit_qty", "realized_pnl"):
         try:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {column} REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    for column in ("exit_order_id", "exit_at", "exit_reason"):
+        try:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {column} TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
     return conn
@@ -69,6 +74,45 @@ def update_fill(order_id: str, status: str, filled_avg_price: float | None, fill
             (status, filled_avg_price, filled_qty, filled_at, order_id),
         )
     conn.close()
+
+
+def record_exit(
+    order_id: str,
+    exit_order_id: str,
+    exit_price: float,
+    exit_qty: float,
+    exit_at: str | None,
+    exit_reason: str,
+    realized_pnl: float,
+) -> None:
+    conn = _connect()
+    with conn:
+        conn.execute(
+            """
+            UPDATE trades
+            SET exit_order_id = ?, exit_price = ?, exit_qty = ?, exit_at = ?, exit_reason = ?, realized_pnl = ?
+            WHERE order_id = ?
+            """,
+            (exit_order_id, exit_price, exit_qty, exit_at, exit_reason, realized_pnl, order_id),
+        )
+    conn.close()
+
+
+def trades_awaiting_exit() -> list[dict]:
+    """Filled bracket trades (a stop loss or take profit was attached) whose exit leg
+    hasn't filled yet, so the sync route knows to keep checking their child orders."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT * FROM trades
+        WHERE status = 'filled'
+          AND exit_order_id IS NULL
+          AND (stop_loss_price IS NOT NULL OR take_profit_price IS NOT NULL)
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def list_trades(limit: int = 100) -> list[dict]:

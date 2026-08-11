@@ -657,7 +657,10 @@ td {
     display: grid;
   }
 
-  .settings-form {
+  .settings-form,
+  #trade-form,
+  #quote-form,
+  #scanner-form {
     display: grid;
     grid-template-columns: 1fr;
   }

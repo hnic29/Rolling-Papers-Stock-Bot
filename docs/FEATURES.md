@@ -21,11 +21,7 @@ Use it to:
 - View current bot status.
 - Submit a manual paper order after Alpaca paper credentials are configured.
 
-The dashboard uses a generated space image background stored at:
-
-```text
-static/space-background.png
-```
+The dashboard background is a CSS-only animated aurora (starfield plus drifting gradient bands), defined in `static/styles.css` — no image asset behind it.
 
 ### Bot State
 
@@ -239,51 +235,6 @@ It models the video's core rules:
 - Respect exit indicators such as large sellers, hidden sellers, red tape bursts, slowing buying, topping tails, and red candles.
 
 Because the original strategy uses scanners, Level 2, and time-and-sales interpretation, the current implementation accepts those values as structured inputs. The next planned step is wiring live scanner and market data into those fields.
-
-### Strategy Evaluator API
-
-Evaluate a pullback setup with:
-
-```text
-POST /api/strategy/evaluate
-```
-
-Example request:
-
-```json
-{
-  "candidate": {
-    "symbol": "YXT",
-    "price": 7.6,
-    "percent_change": 150,
-    "relative_volume": 25,
-    "total_volume": 5000000,
-    "float_shares": 3000000,
-    "is_leading_gainer": true
-  },
-  "candles": [
-    { "open": 6.8, "high": 7.8, "low": 6.7, "close": 7.6, "volume": 900000 },
-    { "open": 7.6, "high": 7.7, "low": 7.35, "close": 7.42, "volume": 280000 },
-    { "open": 7.42, "high": 7.82, "low": 7.4, "close": 7.72, "volume": 380000 }
-  ],
-  "ema9": 7.35,
-  "high_of_day": 7.8,
-  "pullback_low": 7.35,
-  "proposed_entry": 7.6,
-  "proposed_stop": 7.45
-}
-```
-
-Example response:
-
-```json
-{
-  "signal": "buy",
-  "confidence": 0.85,
-  "risk_per_share": 0.15,
-  "first_target": 7.8
-}
-```
 
 ## Running The App
 
