@@ -30,9 +30,10 @@ const WIZARD_STEPS = [
     body: `
       <p>Open the <strong>Settings</strong> tab in the top navigation.</p>
       <ul>
-        <li>Paste your Alpaca <strong>paper trading</strong> API key and secret key (free — sign up at alpaca.markets if you don't have them)</li>
-        <li>Optionally add an FMP API key to unlock richer scanner data (news, sector, float)</li>
-        <li>Click <strong>Save Settings</strong></li>
+        <li>Don't have keys yet? <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Get free Alpaca paper-trading keys</a> — required for quotes, charts, and trading.</li>
+        <li>Paste your Alpaca <strong>paper trading</strong> API key and secret key</li>
+        <li>Optionally <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">get a free FMP key</a> too — it unlocks live float-share data for the scanner (everything else works without it)</li>
+        <li>Click <strong>Save Settings</strong>, then <strong>Test Connection</strong> to confirm both keys actually work</li>
       </ul>
       <p>Leave "Allow live trading" unchecked unless you specifically intend to trade real money.</p>
     `,
@@ -247,6 +248,16 @@ async function loadSettings() {
   form.fmp_api_key.value = settings.fmp_api_key;
   form.alpaca_paper.checked = settings.alpaca_paper;
   form.allow_live_trading.checked = settings.allow_live_trading;
+}
+
+async function checkApiKeysConfigured() {
+  try {
+    const settings = await api("/api/settings");
+    document.querySelector("#setup-banner").hidden = Boolean(settings.alpaca_api_key);
+  } catch (error) {
+    // Don't block the UI over a settings-check failure — the rest of the app
+    // already surfaces broker errors where they matter.
+  }
 }
 
 let assetClass = "stock";
@@ -1353,6 +1364,34 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
   form.alpaca_secret_key.value = settings.alpaca_secret_key;
   form.fmp_api_key.value = settings.fmp_api_key;
   document.querySelector("#message").textContent = "Settings saved";
+  await checkApiKeysConfigured();
+});
+
+document.querySelector("#setup-banner-settings-link").addEventListener("click", async () => {
+  document.querySelector('.tab[data-view="settings"]').click();
+});
+
+function renderConnectionTestRow(label, result) {
+  const icon = result.ok ? "✅" : result.configured ? "❌" : "⚠";
+  return `<li class="${result.ok ? "up" : result.configured ? "down" : ""}">${icon} <strong>${escapeHtml(label)}:</strong> ${escapeHtml(result.detail)}</li>`;
+}
+
+document.querySelector("#test-connection").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const results = document.querySelector("#connection-test-results");
+  button.disabled = true;
+  button.textContent = "Testing...";
+  results.hidden = false;
+  results.innerHTML = `<li>Testing...</li>`;
+  try {
+    const response = await api("/api/settings/test");
+    results.innerHTML = renderConnectionTestRow("Alpaca", response.alpaca) + renderConnectionTestRow("FMP", response.fmp);
+  } catch (error) {
+    results.innerHTML = `<li class="down">❌ ${escapeHtml(error.message)}</li>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Test Connection";
+  }
 });
 
 document.querySelector("#trade-form").addEventListener("submit", async (event) => {
@@ -1545,6 +1584,7 @@ document.querySelectorAll("#performance-range-buttons .range-btn").forEach((btn)
 updateMarketClock();
 setInterval(updateMarketClock, 1000);
 
+checkApiKeysConfigured();
 refresh();
 refreshQuote().catch((error) => {
   document.querySelector("#message").textContent = error.message;

@@ -53,6 +53,86 @@ def test_account_returns_502_not_a_raw_traceback_on_unexpected_broker_failure(mo
     assert "Could not fetch Alpaca account" in response.json()["detail"]
 
 
+def test_settings_test_reports_unconfigured_keys_as_not_configured(monkeypatch):
+    class UnavailableBroker:
+        def __init__(self):
+            raise BrokerUnavailable("no Alpaca credentials configured")
+
+    class UnconfiguredFmp:
+        configured = False
+
+    monkeypatch.setattr("app.main.AlpacaBroker", UnavailableBroker)
+    monkeypatch.setattr("app.main.FmpClient", UnconfiguredFmp)
+
+    response = client.get("/api/settings/test")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["alpaca"]["configured"] is False
+    assert body["alpaca"]["ok"] is False
+    assert body["fmp"]["configured"] is False
+
+
+def test_settings_test_reports_a_working_alpaca_key(monkeypatch):
+    class WorkingBroker:
+        def account(self):
+            return SimpleNamespace(status="ACTIVE")
+
+    class UnconfiguredFmp:
+        configured = False
+
+    monkeypatch.setattr("app.main.AlpacaBroker", WorkingBroker)
+    monkeypatch.setattr("app.main.FmpClient", UnconfiguredFmp)
+
+    response = client.get("/api/settings/test")
+
+    body = response.json()
+    assert body["alpaca"]["configured"] is True
+    assert body["alpaca"]["ok"] is True
+    assert "ACTIVE" in body["alpaca"]["detail"]
+
+
+def test_settings_test_reports_a_rejected_alpaca_key_without_a_raw_traceback(monkeypatch):
+    class RejectingBroker:
+        def account(self):
+            raise RuntimeError("401 unauthorized")
+
+    class UnconfiguredFmp:
+        configured = False
+
+    monkeypatch.setattr("app.main.AlpacaBroker", RejectingBroker)
+    monkeypatch.setattr("app.main.FmpClient", UnconfiguredFmp)
+
+    response = client.get("/api/settings/test")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["alpaca"]["configured"] is True
+    assert body["alpaca"]["ok"] is False
+    assert "rejected" in body["alpaca"]["detail"]
+
+
+def test_settings_test_reports_a_working_fmp_key(monkeypatch):
+    class UnavailableBroker:
+        def __init__(self):
+            raise BrokerUnavailable("no Alpaca credentials configured")
+
+    class WorkingFmp:
+        configured = True
+
+        def shares_float(self, symbol):
+            return {"symbol": symbol, "floatShares": 1000000}
+
+    monkeypatch.setattr("app.main.AlpacaBroker", UnavailableBroker)
+    monkeypatch.setattr("app.main.FmpClient", WorkingFmp)
+
+    response = client.get("/api/settings/test")
+
+    body = response.json()
+    assert body["fmp"]["configured"] is True
+    assert body["fmp"]["ok"] is True
+
+
 def test_positions_returns_502_not_a_raw_traceback_on_unexpected_broker_failure(monkeypatch):
     class BoomBroker:
         def positions_as_dicts(self):

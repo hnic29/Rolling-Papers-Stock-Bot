@@ -22,6 +22,7 @@ from app.services import trade_log
 from app.services.backtest import run_backtest
 from app.services.bot import bot
 from app.services.env_file import mask_secret, read_env, write_env
+from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 
 app = FastAPI(title="Rolling Papers Bot", version="0.1.0")
@@ -44,7 +45,7 @@ def crypto_pair(symbol: str) -> str:
     return symbol.upper().replace("-", "/")
 
 
-def _order_status_str(value) -> str:
+def _enum_str(value) -> str:
     """Alpaca SDK enums (order status, order type) stringify via .value; plain strings pass through."""
     return str(value.value if hasattr(value, "value") else value)
 
@@ -97,6 +98,31 @@ def save_settings(request: AppSettingsUpdate):
     write_env(updates)
     reload_settings()
     return get_settings()
+
+
+@app.get("/api/settings/test")
+def test_settings():
+    try:
+        account = AlpacaBroker().account()
+    except BrokerUnavailable as exc:
+        alpaca_result = {"configured": False, "ok": False, "detail": str(exc)}
+    except Exception as exc:
+        alpaca_result = {"configured": True, "ok": False, "detail": f"Alpaca rejected the request: {exc}"}
+    else:
+        alpaca_result = {"configured": True, "ok": True, "detail": f"Connected — account status: {_enum_str(account.status)}"}
+
+    fmp = FmpClient()
+    if not fmp.configured:
+        fmp_result = {"configured": False, "ok": False, "detail": "No FMP key configured (optional — float data falls back to the local list)"}
+    else:
+        try:
+            fmp.shares_float("AAPL")
+        except Exception as exc:
+            fmp_result = {"configured": True, "ok": False, "detail": f"FMP rejected the request: {exc}"}
+        else:
+            fmp_result = {"configured": True, "ok": True, "detail": "Connected"}
+
+    return {"alpaca": alpaca_result, "fmp": fmp_result}
 
 
 @app.post("/api/start", response_model=BotStatus)
@@ -191,7 +217,7 @@ def sync_trade_history():
             continue
         trade_log.update_fill(
             order_id=order_id,
-            status=_order_status_str(order.status),
+            status=_enum_str(order.status),
             filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price is not None else None,
             filled_qty=float(order.filled_qty) if order.filled_qty is not None else None,
             filled_at=order.filled_at.isoformat() if order.filled_at is not None else None,
@@ -203,12 +229,12 @@ def sync_trade_history():
         except Exception:
             continue
         filled_leg = next(
-            (leg for leg in (order.legs or []) if _order_status_str(leg.status) == "filled"),
+            (leg for leg in (order.legs or []) if _enum_str(leg.status) == "filled"),
             None,
         )
         if filled_leg is None or filled_leg.filled_avg_price is None:
             continue
-        exit_reason = "target" if _order_status_str(filled_leg.order_type) == "limit" else "stop"
+        exit_reason = "target" if _enum_str(filled_leg.order_type) == "limit" else "stop"
         exit_price = float(filled_leg.filled_avg_price)
         exit_qty = float(filled_leg.filled_qty) if filled_leg.filled_qty is not None else trade["qty"]
         entry_price = trade["filled_avg_price"] or 0.0

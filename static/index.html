@@ -38,6 +38,15 @@
         <button class="tab" data-view="settings">Settings</button>
       </nav>
 
+      <div class="setup-banner" id="setup-banner" hidden>
+        <p>
+          <strong>Setup needed:</strong> this app needs a free Alpaca paper-trading account to fetch data or place
+          trades. <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Get free Alpaca API keys</a>,
+          then paste your API key and secret into
+          <button type="button" id="setup-banner-settings-link">Settings</button> and click Save Settings.
+        </p>
+      </div>
+
       <section id="dashboard-view" class="grid view active">
         <nav class="section-nav" id="section-nav" aria-label="Jump to section">
           <a class="section-nav-link" href="#section-status">Status</a>
@@ -319,6 +328,10 @@
       <section id="settings-view" class="view">
         <article class="panel settings-panel">
           <h2>API Settings</h2>
+          <p class="chart-hint">
+            Don't have keys yet? <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Get free Alpaca paper-trading keys</a>
+            (required) or <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">get a free FMP key</a> (optional).
+          </p>
           <form id="settings-form" class="settings-form">
             <label>Alpaca API Key <input name="alpaca_api_key" autocomplete="off" /></label>
             <label>Alpaca Secret Key <input name="alpaca_secret_key" type="password" autocomplete="off" /></label>
@@ -326,7 +339,9 @@
             <label class="check-row"><input name="alpaca_paper" type="checkbox" checked /> Alpaca paper trading</label>
             <label class="check-row"><input name="allow_live_trading" type="checkbox" /> Allow live trading</label>
             <button type="submit">Save Settings</button>
+            <button type="button" id="test-connection">Test Connection</button>
           </form>
+          <ul id="connection-test-results" class="connection-test-results" hidden></ul>
         </article>
       </section>
     </main>

@@ -269,6 +269,38 @@ form {
   background: #0e5664;
 }
 
+.setup-banner {
+  background: rgba(224, 161, 63, 0.12);
+  border: 1px solid rgba(224, 161, 63, 0.4);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+}
+
+.setup-banner p {
+  color: #f0d9a8;
+  margin: 0;
+}
+
+.setup-banner strong {
+  color: #ffcf7a;
+}
+
+.setup-banner a {
+  color: #ffcf7a;
+}
+
+.setup-banner button {
+  background: none;
+  border: none;
+  color: #ffcf7a;
+  display: inline;
+  font: inherit;
+  min-height: auto;
+  padding: 0;
+  text-decoration: underline;
+}
+
 section.view {
   display: none;
 }
@@ -291,6 +323,28 @@ button {
   background: #0e5664;
   color: white;
   cursor: pointer;
+  transition: background-color 0.12s ease, transform 0.08s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+
+button:hover {
+  filter: brightness(1.15);
+}
+
+button:active {
+  filter: brightness(0.88);
+  transform: translateY(1px) scale(0.98);
+}
+
+button:focus-visible {
+  outline: 2px solid #7cf0b3;
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  filter: none;
+  opacity: 0.5;
+  transform: none;
 }
 
 input,
@@ -383,6 +437,15 @@ form {
 
 .settings-panel {
   max-width: 760px;
+}
+
+.connection-test-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
 }
 
 .settings-form {
