@@ -1,0 +1,23 @@
+[Unit]
+Description=Rolling Papers Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rpbot
+Group=rpbot
+WorkingDirectory=/opt/rolling-papers-bot
+EnvironmentFile=/etc/rolling-papers-bot/rolling-papers-bot.env
+ExecStart=/opt/rolling-papers-bot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Light sandboxing — the service only needs its own install dir and the
+# separate state dir the trade log lives in (see TRADE_LOG_PATH).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rolling-papers-bot
+
+[Install]
+WantedBy=multi-user.target
