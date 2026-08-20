@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -8,8 +9,11 @@ MARKET_TZ = ZoneInfo("America/New_York")
 # Deliberately relative to the working directory (not app.paths.resource_path's
 # PyInstaller _MEIPASS), the same pattern app/services/env_file.py uses for .env —
 # _MEIPASS is a read-only temp dir wiped on exit, which would silently lose every
-# trade the moment the packaged app closed.
-DB_PATH = Path("data/trade_log.db")
+# trade the moment the packaged app closed. TRADE_LOG_PATH lets a deployment point
+# this at a mounted persistent volume, kept separate from data/ (which also holds
+# the bundled symbol_metadata.csv/stock_universe.txt) so mounting a volume there
+# doesn't shadow those read-only files.
+DB_PATH = Path(os.environ.get("TRADE_LOG_PATH", "data/trade_log.db"))
 
 TERMINAL_STATUSES = {"filled", "canceled", "rejected", "expired"}
 

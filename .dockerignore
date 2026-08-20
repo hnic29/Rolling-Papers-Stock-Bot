@@ -1,0 +1,17 @@
+.venv
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+tmp
+build
+build_exe
+dist
+dist_exe
+*.spec
+.env
+data/trade_log.db
+tests
+.claude
+*.md
