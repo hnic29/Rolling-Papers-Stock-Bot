@@ -298,12 +298,12 @@ def test_settings_post_strips_a_pasted_label_off_the_key(monkeypatch, tmp_path):
             "alpaca_api_key": "",
             "alpaca_secret_key": "",
             "alpaca_paper": True,
-            "fmp_api_key": "apikey: 4uWwLRKwVkIKwG0PxtqQaJkJAe8gUk2H",
+            "fmp_api_key": "apikey: TestKeyNotARealCredential123",
             "allow_live_trading": False,
         },
     )
 
     assert response.status_code == 200
     saved = fake_env.read_text(encoding="utf-8")
-    assert "FMP_API_KEY=4uWwLRKwVkIKwG0PxtqQaJkJAe8gUk2H" in saved
+    assert "FMP_API_KEY=TestKeyNotARealCredential123" in saved
     assert "apikey" not in saved.lower()
