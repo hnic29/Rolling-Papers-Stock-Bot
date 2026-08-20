@@ -1,3 +1,7 @@
+import asyncio
+import re
+from contextlib import asynccontextmanager
+
 from alpaca.common.enums import Sort
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from fastapi import FastAPI, HTTPException
@@ -7,7 +11,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
-from app.config import reload_settings
+from app.config import reload_settings, settings
 from app.models import (
     AppSettingsResponse,
     AppSettingsUpdate,
@@ -25,7 +29,26 @@ from app.services.env_file import mask_secret, read_env, write_env
 from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 
-app = FastAPI(title="Rolling Papers Bot", version="0.1.0")
+
+async def _automation_loop() -> None:
+    """Runs for the life of the server; each pass is a no-op unless auto-trading is on."""
+    while True:
+        try:
+            if bot.status.auto_trading_enabled:
+                await asyncio.to_thread(bot.auto_cycle)
+        except Exception:
+            pass  # a single bad cycle should never kill the loop
+        await asyncio.sleep(settings.automation_interval_seconds)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_automation_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Rolling Papers Bot", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 scanner = MarketScanner()
 MAX_BARS_LIMIT = 5000
@@ -41,13 +64,20 @@ RANGE_PRESETS: dict[str, tuple[TimeFrame, int]] = {
 }
 
 
-def crypto_pair(symbol: str) -> str:
-    return symbol.upper().replace("-", "/")
-
-
 def _enum_str(value) -> str:
     """Alpaca SDK enums (order status, order type) stringify via .value; plain strings pass through."""
     return str(value.value if hasattr(value, "value") else value)
+
+
+_API_KEY_LABEL_PREFIX = re.compile(r"(?i)^(api[_ -]?key|secret([_ -]?key)?)\s*[:=]\s*")
+
+
+def _clean_api_key(value: str) -> str:
+    """Strip paste artifacts like a leading 'apikey:' label or surrounding quotes — people often
+    copy the whole 'label: value' line straight from a provider's dashboard instead of just the key."""
+    value = value.strip().strip("'\"")
+    value = _API_KEY_LABEL_PREFIX.sub("", value)
+    return value.strip().strip("'\"")
 
 
 def resolve_period(period: str, now: datetime) -> tuple[TimeFrame, datetime]:
@@ -89,11 +119,11 @@ def save_settings(request: AppSettingsUpdate):
         "ALLOW_LIVE_TRADING": str(request.allow_live_trading).lower(),
     }
     if request.alpaca_api_key and "..." not in request.alpaca_api_key:
-        updates["ALPACA_API_KEY"] = request.alpaca_api_key.strip()
+        updates["ALPACA_API_KEY"] = _clean_api_key(request.alpaca_api_key)
     if request.alpaca_secret_key and "..." not in request.alpaca_secret_key:
-        updates["ALPACA_SECRET_KEY"] = request.alpaca_secret_key.strip()
+        updates["ALPACA_SECRET_KEY"] = _clean_api_key(request.alpaca_secret_key)
     if request.fmp_api_key and "..." not in request.fmp_api_key:
-        updates["FMP_API_KEY"] = request.fmp_api_key.strip()
+        updates["FMP_API_KEY"] = _clean_api_key(request.fmp_api_key)
 
     write_env(updates)
     reload_settings()
@@ -116,9 +146,9 @@ def test_settings():
         fmp_result = {"configured": False, "ok": False, "detail": "No FMP key configured (optional — float data falls back to the local list)"}
     else:
         try:
-            fmp.shares_float("AAPL")
+            fmp.shares_float("AAPL", use_cache=False)
         except Exception as exc:
-            fmp_result = {"configured": True, "ok": False, "detail": f"FMP rejected the request: {exc}"}
+            fmp_result = {"configured": True, "ok": False, "detail": str(exc)}
         else:
             fmp_result = {"configured": True, "ok": True, "detail": "Connected"}
 
@@ -138,6 +168,16 @@ def stop():
 @app.post("/api/tick", response_model=BotStatus)
 def tick():
     return bot.tick()
+
+
+@app.post("/api/automation/start", response_model=BotStatus)
+def start_automation():
+    return bot.start_auto_trading()
+
+
+@app.post("/api/automation/stop", response_model=BotStatus)
+def stop_automation():
+    return bot.stop_auto_trading()
 
 
 @app.post("/api/scanner")
@@ -295,52 +335,6 @@ def bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: 
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca bars for {symbol.upper()}: {exc}") from exc
-
-
-@app.get("/api/crypto/quote/{symbol}")
-def crypto_quote(symbol: str):
-    pair = crypto_pair(symbol)
-    try:
-        return AlpacaBroker().crypto_latest_quote(pair)
-    except BrokerUnavailable as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca crypto quote for {pair}: {exc}") from exc
-
-
-@app.get("/api/crypto/bars/{symbol}")
-def crypto_bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: int | None = None, period: str | None = None):
-    pair = crypto_pair(symbol)
-    try:
-        sort = Sort.ASC
-        timeframe = TimeFrame.Minute
-        if trading_date:
-            start = datetime.combine(trading_date, time.min, tzinfo=UTC)
-            end = datetime.combine(trading_date, time.max, tzinfo=UTC)
-            limit = min(max(limit, 1), 1440)
-        elif period:
-            end = datetime.now(UTC)
-            timeframe, start = resolve_period(period, end)
-            limit = MAX_BARS_LIMIT
-        elif days:
-            days = min(max(days, 1), 30)
-            end = datetime.now(UTC)
-            start = end - timedelta(days=days)
-            limit = min(max(limit, 1), days * 1440, MAX_BARS_LIMIT)
-            sort = Sort.DESC
-        else:
-            end = datetime.now(UTC)
-            start = end - timedelta(days=1)
-        return {
-            "symbol": pair,
-            "bars": AlpacaBroker().crypto_bars(pair, start=start, end=end, limit=limit, sort=sort, timeframe=timeframe),
-        }
-    except BrokerUnavailable as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca crypto bars for {pair}: {exc}") from exc
 
 
 @app.post("/api/trade")

@@ -20,7 +20,7 @@ const WIZARD_STEPS = [
   {
     title: "Welcome to Rolling Papers Bot",
     body: `
-      <p>Rolling Papers Bot is a <strong>paper-first</strong> day-trading assistant for stocks and crypto, built on FastAPI and Alpaca.</p>
+      <p>Rolling Papers Bot is a <strong>paper-first</strong> day-trading assistant for stocks, built on FastAPI and Alpaca.</p>
       <p>Paper trading is on by default and live trading is blocked until you explicitly enable it — so it's safe to explore and experiment.</p>
       <p>This wizard walks through connecting your account, reading the chart, placing a trade, and tracking whether it made or lost money. You can reopen it anytime with the <strong>Getting Started</strong> button.</p>
     `,
@@ -59,16 +59,9 @@ const WIZARD_STEPS = [
     `,
   },
   {
-    title: "Trade stocks or crypto",
-    body: `
-      <p>Use the <strong>Stocks / Crypto</strong> toggle at the top of the page.</p>
-      <p>Crypto defaults to <code>BTC/USD</code> and trades 24/7, so the market-hours countdown doesn't apply to it. Switching resets the ticker and chart to that asset class's default symbol.</p>
-    `,
-  },
-  {
     title: "Place your first (paper) trade",
     body: `
-      <p>In <strong>Manual Paper Order</strong>: enter a symbol, quantity (fractional amounts work for crypto), an optional estimated price, choose Buy or Sell, then Submit.</p>
+      <p>In <strong>Manual Paper Order</strong>: enter a symbol, quantity, an optional estimated price, choose Buy or Sell, then Submit.</p>
       <p>Since paper trading is on by default, this uses simulated money — a safe way to try things out.</p>
     `,
   },
@@ -85,13 +78,12 @@ const WIZARD_STEPS = [
   {
     title: "Automate it (optional)",
     body: `
-      <p>The <strong>Start / Stop / Run Tick</strong> buttons in the top bar control the built-in strategy, running on the symbol set by <code>BOT_SYMBOL</code> in your <code>.env</code> file.</p>
+      <p>Two ways to run the strategy from the top bar:</p>
       <ul>
-        <li><strong>Start</strong> arms the bot</li>
-        <li><strong>Run Tick</strong> evaluates one trading signal</li>
-        <li><strong>Stop</strong> halts it</li>
+        <li><strong>Run Tick</strong> checks one symbol (set by <code>BOT_SYMBOL</code> in <code>.env</code>) and just reports what it sees — nothing gets submitted automatically.</li>
+        <li><strong>Auto-Trading</strong> is the real automation: while it's on, the app scans the stock universe every couple of minutes on its own, and for any genuine buy signal, submits a bracket order (stop-loss and take-profit included) without you clicking anything. It's off by default — you turn it on explicitly.</li>
       </ul>
-      <p>Safety limits — max daily loss, max trades per day, max position value — are enforced from your <code>.env</code> settings. You're ready to go.</p>
+      <p>Safety limits — max daily loss, max trades per day, max position value — apply to every trade Auto-Trading places, exactly like a manual order. And it can only ever place <strong>real</strong>-money trades if you've explicitly turned off paper mode <em>and</em> checked "Allow live trading" in Settings — otherwise every trade, automated or not, stays paper.</p>
     `,
   },
 ];
@@ -222,6 +214,9 @@ function render(status) {
   document.querySelector("#message").textContent = status.last_message;
   document.querySelector("#mode").textContent = status.paper ? "Paper" : "Live";
   document.querySelector("#running").textContent = status.running ? "Yes" : "No";
+  const startBtn = document.querySelector("#start");
+  startBtn.setAttribute("aria-pressed", String(Boolean(status.running)));
+  startBtn.textContent = status.running ? "Started" : "Start";
   document.querySelector("#symbol").textContent = status.symbol;
   document.querySelector("#signal").textContent = status.last_signal;
   document.querySelector("#trades").textContent = status.trades_today;
@@ -229,6 +224,13 @@ function render(status) {
   const pnlEl = document.querySelector("#pnl");
   pnlEl.textContent = `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`;
   pnlEl.className = pnl >= 0 ? "up" : "down";
+  document.querySelector("#auto-trading-status").textContent = status.auto_trading_enabled ? "On" : "Off";
+  const autoBtn = document.querySelector("#toggle-auto-trading");
+  autoBtn.setAttribute("aria-pressed", String(Boolean(status.auto_trading_enabled)));
+  autoBtn.textContent = status.auto_trading_enabled ? "Auto-Trading: On" : "Auto-Trading: Off";
+  document.querySelector("#last-automation-run").textContent = status.last_automation_run_at
+    ? new Date(status.last_automation_run_at).toLocaleString()
+    : "Never";
 }
 
 async function refresh() {
@@ -260,36 +262,11 @@ async function checkApiKeysConfigured() {
   }
 }
 
-let assetClass = "stock";
-const DEFAULT_SYMBOLS = { stock: "AAPL", crypto: "BTC/USD" };
-const BARS_PER_DAY = { stock: 390, crypto: 1440 };
+const DEFAULT_SYMBOL = "AAPL";
+const BARS_PER_DAY = 390;
 
 function symbolForUrl(symbol) {
-  const upper = symbol.toUpperCase();
-  return assetClass === "crypto" ? upper.replace("/", "-") : upper;
-}
-
-function quoteEndpoint() {
-  return assetClass === "crypto" ? "/api/crypto/quote" : "/api/quote";
-}
-
-function barsEndpoint() {
-  return assetClass === "crypto" ? "/api/crypto/bars" : "/api/bars";
-}
-
-function setAssetClass(cls) {
-  assetClass = cls;
-  document.querySelectorAll(".asset-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.asset === cls));
-  const defaultSymbol = DEFAULT_SYMBOLS[cls];
-  document.querySelector("#trade-form input[name='symbol']").value = defaultSymbol;
-  document.querySelector("#quote-form input[name='symbol']").value = defaultSymbol;
-  document.querySelector("#chart-date").value = "";
-  refreshQuote(defaultSymbol).catch((error) => {
-    document.querySelector("#message").textContent = error.message;
-  });
-  refreshChart(defaultSymbol).catch((error) => {
-    document.querySelector("#message").textContent = error.message;
-  });
+  return symbol.toUpperCase();
 }
 
 function renderQuote(quote) {
@@ -299,8 +276,8 @@ function renderQuote(quote) {
   document.querySelector("#quote-time").textContent = quote.timestamp ? new Date(quote.timestamp).toLocaleTimeString() : "-";
 }
 
-async function refreshQuote(symbol = DEFAULT_SYMBOLS[assetClass]) {
-  const quote = await api(`${quoteEndpoint()}/${encodeURIComponent(symbolForUrl(symbol))}`);
+async function refreshQuote(symbol = DEFAULT_SYMBOL) {
+  const quote = await api(`/api/quote/${encodeURIComponent(symbolForUrl(symbol))}`);
   renderQuote(quote);
 }
 
@@ -310,17 +287,16 @@ let chartRangePeriod = null;
 async function refreshChart(symbol = getManualSymbol()) {
   const selectedDate = document.querySelector("#chart-date").value;
   const params = new URLSearchParams();
-  const perDay = BARS_PER_DAY[assetClass];
   if (selectedDate) {
     params.set("trading_date", selectedDate);
-    params.set("limit", String(perDay));
+    params.set("limit", String(BARS_PER_DAY));
   } else if (chartRangePeriod) {
     params.set("period", chartRangePeriod);
   } else {
     params.set("days", String(chartRangeDays));
-    params.set("limit", String(chartRangeDays * perDay));
+    params.set("limit", String(chartRangeDays * BARS_PER_DAY));
   }
-  const response = await api(`${barsEndpoint()}/${encodeURIComponent(symbolForUrl(symbol))}?${params.toString()}`);
+  const response = await api(`/api/bars/${encodeURIComponent(symbolForUrl(symbol))}?${params.toString()}`);
   setChartData(response.symbol, response.bars);
 }
 
@@ -337,11 +313,11 @@ let chartState = null;
 const MIN_VISIBLE_CANDLES = 10;
 
 function getManualSymbol() {
-  return document.querySelector("#trade-form input[name='symbol']").value || DEFAULT_SYMBOLS[assetClass];
+  return document.querySelector("#trade-form input[name='symbol']").value || DEFAULT_SYMBOL;
 }
 
 function getTickerSymbol() {
-  return document.querySelector("#quote-form input[name='symbol']").value || DEFAULT_SYMBOLS[assetClass];
+  return document.querySelector("#quote-form input[name='symbol']").value || DEFAULT_SYMBOL;
 }
 
 // Polls fn on an interval, skipping ticks while the tab is hidden so background
@@ -1340,6 +1316,16 @@ document.querySelector("#start").addEventListener("click", async () => render(aw
 document.querySelector("#stop").addEventListener("click", async () => render(await api("/api/stop", { method: "POST" })));
 document.querySelector("#tick").addEventListener("click", async () => render(await api("/api/tick", { method: "POST" })));
 
+document.querySelector("#toggle-auto-trading").addEventListener("click", async (event) => {
+  const isOn = event.currentTarget.getAttribute("aria-pressed") === "true";
+  if (!isOn) {
+    // Auto-trading depends on the bot actually being started — start it first
+    // (a no-op if it's already running) so one click is enough.
+    await api("/api/start", { method: "POST" });
+  }
+  render(await api(isOn ? "/api/automation/stop" : "/api/automation/start", { method: "POST" }));
+});
+
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", async () => {
     switchView(tab.dataset.view);
@@ -1498,14 +1484,10 @@ document.querySelector("#quote-form").addEventListener("submit", async (event) =
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   try {
-    await refreshQuote(String(form.get("symbol") || DEFAULT_SYMBOLS[assetClass]));
+    await refreshQuote(String(form.get("symbol") || DEFAULT_SYMBOL));
   } catch (error) {
     document.querySelector("#message").textContent = error.message;
   }
-});
-
-document.querySelectorAll(".asset-btn").forEach((btn) => {
-  btn.addEventListener("click", () => setAssetClass(btn.dataset.asset));
 });
 
 document.querySelector("#scanner-form").addEventListener("submit", async (event) => {

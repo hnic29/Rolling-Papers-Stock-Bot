@@ -19,8 +19,6 @@ class RiskManager:
                 raise ValueError("Requested trade exceeds max position value setting.")
 
         if trade.stop_loss_price is not None or trade.take_profit_price is not None:
-            if "/" in trade.symbol:
-                raise ValueError("Stop-loss/take-profit orders aren't supported for crypto on Alpaca.")
             if trade.qty != int(trade.qty):
                 raise ValueError("Stop-loss/take-profit orders require a whole-share quantity.")
             if trade.stop_loss_price is not None and trade.stop_loss_price <= 0:

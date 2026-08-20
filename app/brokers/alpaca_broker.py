@@ -5,10 +5,8 @@ from datetime import datetime
 
 from alpaca.common.enums import Sort
 from alpaca.data.enums import DataFeed
-from alpaca.data.historical import CryptoHistoricalDataClient, NewsClient, StockHistoricalDataClient
+from alpaca.data.historical import NewsClient, StockHistoricalDataClient
 from alpaca.data.requests import (
-    CryptoBarsRequest,
-    CryptoLatestQuoteRequest,
     NewsRequest,
     StockBarsRequest,
     StockLatestQuoteRequest,
@@ -35,10 +33,6 @@ class AlpacaBroker:
             paper=settings.alpaca_paper,
         )
         self.data_client = StockHistoricalDataClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
-        )
-        self.crypto_data_client = CryptoHistoricalDataClient(
             settings.alpaca_api_key,
             settings.alpaca_secret_key,
         )
@@ -101,7 +95,6 @@ class AlpacaBroker:
         take_profit_price: float | None = None,
         stop_loss_price: float | None = None,
     ):
-        is_crypto = "/" in symbol
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
         order_class = None
@@ -116,7 +109,7 @@ class AlpacaBroker:
             symbol=symbol.upper(),
             qty=qty,
             side=order_side,
-            time_in_force=TimeInForce.GTC if is_crypto else TimeInForce.DAY,
+            time_in_force=TimeInForce.DAY,
             order_class=order_class,
             take_profit=take_profit,
             stop_loss=stop_loss,
@@ -142,50 +135,6 @@ class AlpacaBroker:
             "midpoint": midpoint,
             "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
         }
-
-    def crypto_latest_quote(self, pair: str) -> dict:
-        request = CryptoLatestQuoteRequest(symbol_or_symbols=pair.upper())
-        quotes = self.crypto_data_client.get_crypto_latest_quote(request)
-        quote = quotes[pair.upper()]
-        bid = float(quote.bid_price or 0)
-        ask = float(quote.ask_price or 0)
-        midpoint = round((bid + ask) / 2, 4) if bid and ask else None
-        return {
-            "symbol": pair.upper(),
-            "bid_price": bid,
-            "bid_size": float(quote.bid_size or 0),
-            "ask_price": ask,
-            "ask_size": float(quote.ask_size or 0),
-            "midpoint": midpoint,
-            "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
-        }
-
-    def crypto_bars(
-        self, pair: str, start: datetime, end: datetime, limit: int = 120, sort: Sort = Sort.ASC, timeframe: TimeFrame = TimeFrame.Minute
-    ) -> list[dict]:
-        request = CryptoBarsRequest(
-            symbol_or_symbols=pair.upper(),
-            timeframe=timeframe,
-            start=start,
-            end=end,
-            limit=limit,
-            sort=sort,
-        )
-        bars = self.crypto_data_client.get_crypto_bars(request)
-        result = [
-            {
-                "timestamp": bar.timestamp.isoformat(),
-                "open": float(bar.open),
-                "high": float(bar.high),
-                "low": float(bar.low),
-                "close": float(bar.close),
-                "volume": float(bar.volume or 0),
-            }
-            for bar in bars.data.get(pair.upper(), [])
-        ]
-        if sort == Sort.DESC:
-            result.reverse()
-        return result
 
     def daily_bars(self, symbols: list[str], start: datetime, end: datetime):
         request = StockBarsRequest(

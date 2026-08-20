@@ -86,13 +86,6 @@ def test_backtest_skips_days_that_dont_meet_the_score_gate(monkeypatch):
     assert result["ending_equity"] == 10000
 
 
-def test_backtest_rejects_crypto_symbol():
-    import pytest
-
-    with pytest.raises(ValueError, match="stocks-only"):
-        backtest_module.run_backtest("BTC/USD", date(2026, 1, 1), date(2026, 1, 2))
-
-
 def test_backtest_rejects_range_over_cap():
     import pytest
 

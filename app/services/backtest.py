@@ -5,8 +5,11 @@ from zoneinfo import ZoneInfo
 from alpaca.common.enums import Sort
 
 from app.brokers.alpaca_broker import AlpacaBroker
+from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StockCandidate
-from app.services.live_setup import compute_ema
+from app.services.fmp import FmpClient
+from app.services.live_setup import compute_ema, compute_macd, compute_vwap
+from app.services.scanner import MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -20,11 +23,38 @@ def _to_market_date(timestamp) -> date:
     return timestamp.astimezone(MARKET_TZ).date()
 
 
+def _current_float_and_sector(symbol: str) -> tuple[int | None, str | None]:
+    """Float share count and sector, looked up once per backtest run rather than per day.
+    Share structure and sector classification change rarely enough that today's FMP/local-list
+    value is a reasonable stand-in for the whole backtest window — unlike news or "leading
+    gainer" status, which are genuinely day-specific and aren't practical to source historically.
+    Mirrors MarketScanner's own fallback order (FMP first, local metadata list second) so a
+    backtested candidate scores exactly the way the live scanner would score it today."""
+    symbol = symbol.upper()
+    float_shares: int | None = None
+    try:
+        payload = FmpClient().shares_float(symbol)
+    except Exception:
+        payload = None
+    if payload:
+        raw = payload.get("floatShares") or payload.get("float_shares")
+        float_shares = int(raw) if raw else None
+
+    metadata = MarketScanner().load_metadata().get(symbol, {})
+    if float_shares is None:
+        float_shares = metadata.get("float_shares")
+    return float_shares, metadata.get("sector")
+
+
 def _daily_candidates(broker: AlpacaBroker, symbol: str, start: date, end: date) -> dict[date, StockCandidate]:
     """One StockCandidate per trading day, scored the same way the live scanner would —
-    except has_news/float_shares/sector, which aren't practical to source historically,
-    so those two stock-selection pillars never score in a backtest. See run_backtest docstring.
+    except has_news and is_leading_gainer, which are genuinely day-specific and aren't
+    practical to source historically, so those two never contribute to the score in a
+    backtest. float_shares and sector ARE sourced (see _current_float_and_sector) since
+    they're effectively static, so a backtested candidate needs 4 of the *other* 4 pillars
+    the same way live trading needs 4 of 5 — not a stricter "4 of 4" bar.
     """
+    float_shares, sector = _current_float_and_sector(symbol)
     buffer_start = datetime.combine(start - timedelta(days=45), time.min, tzinfo=MARKET_TZ)
     end_dt = datetime.combine(end, time.max, tzinfo=MARKET_TZ)
     bars_response = broker.daily_bars([symbol], start=buffer_start, end=end_dt)
@@ -53,9 +83,9 @@ def _daily_candidates(broker: AlpacaBroker, symbol: str, start: date, end: date)
             percent_change=percent_change,
             relative_volume=relative_volume,
             total_volume=total_volume,
-            float_shares=None,
+            float_shares=float_shares,
             has_news=False,
-            sector=None,
+            sector=sector,
             is_leading_gainer=False,
         )
     return candidates
@@ -81,6 +111,8 @@ def _build_setup(candidate: StockCandidate, bars_so_far: list[dict]) -> Pullback
     candles = _candles_from_bars(bars_so_far)
     closes = [candle.close for candle in candles]
     ema9 = compute_ema(closes)
+    macd = compute_macd(closes)
+    vwap = compute_vwap(candles)
     high_of_day = max(candle.high for candle in candles)
     pullback_low = candles[-2].low
     proposed_entry = candles[-1].close
@@ -90,6 +122,8 @@ def _build_setup(candidate: StockCandidate, bars_so_far: list[dict]) -> Pullback
         candidate=candidate,
         candles=candles,
         ema9=round(ema9, 4),
+        macd=round(macd, 4),
+        vwap=round(vwap, 4),
         high_of_day=high_of_day,
         pullback_low=pullback_low,
         proposed_entry=proposed_entry,
@@ -109,8 +143,6 @@ def run_backtest(
         raise ValueError("End date must be after start date.")
     if (end - start).days > MAX_BACKTEST_DAYS:
         raise ValueError(f"Backtest range is limited to {MAX_BACKTEST_DAYS} days to keep it running in a reasonable time.")
-    if "/" in symbol:
-        raise ValueError("Backtesting the pullback strategy is stocks-only — it isn't meaningful for crypto.")
 
     broker = AlpacaBroker()
     strategy = SmallAccountPullbackStrategy()
@@ -180,7 +212,10 @@ def run_backtest(
                 setup = _build_setup(candidate, bars_so_far)
                 decision = strategy.evaluate(setup)
                 if decision.signal == Signal.buy:
-                    qty = int(position_value // setup.proposed_entry)
+                    risk_per_share = setup.proposed_entry - setup.proposed_stop
+                    qty_by_risk = int(settings.risk_per_trade // risk_per_share) if risk_per_share > 0 else 0
+                    qty_by_capital = int(position_value // setup.proposed_entry)
+                    qty = min(qty_by_risk, qty_by_capital) if qty_by_risk else qty_by_capital
                     if qty >= 1:
                         position = {
                             "qty": qty,

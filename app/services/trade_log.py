@@ -1,6 +1,9 @@
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+MARKET_TZ = ZoneInfo("America/New_York")
 
 # Deliberately relative to the working directory (not app.paths.resource_path's
 # PyInstaller _MEIPASS), the same pattern app/services/env_file.py uses for .env —
@@ -121,6 +124,45 @@ def list_trades(limit: int = 100) -> list[dict]:
     rows = conn.execute("SELECT * FROM trades ORDER BY submitted_at DESC LIMIT ?", (limit,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def todays_realized_trades(trading_day: date) -> list[dict]:
+    """Exits filled today (market time), oldest first — used to evaluate the daily
+    walk-away rules (peak-profit giveback, consecutive losses) against real fills
+    rather than in-memory state that wouldn't survive a restart."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM trades WHERE realized_pnl IS NOT NULL AND exit_at IS NOT NULL ORDER BY exit_at ASC"
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        exit_at = datetime.fromisoformat(row["exit_at"])
+        if exit_at.tzinfo is None:
+            exit_at = exit_at.replace(tzinfo=UTC)
+        if exit_at.astimezone(MARKET_TZ).date() == trading_day:
+            result.append(dict(row))
+    return result
+
+
+def todays_submitted_trades(trading_day: date) -> list[dict]:
+    """Every order submitted today (market time), oldest first — used for the
+    "no trade in over an hour" walk-away rule."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM trades ORDER BY submitted_at ASC").fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        submitted_at = datetime.fromisoformat(row["submitted_at"])
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=UTC)
+        if submitted_at.astimezone(MARKET_TZ).date() == trading_day:
+            result.append(dict(row))
+    return result
 
 
 def pending_order_ids() -> list[str]:

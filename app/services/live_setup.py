@@ -9,6 +9,8 @@ from app.services.scanner import MarketScanner
 
 MARKET_TZ = ZoneInfo("America/New_York")
 EMA_PERIOD = 9
+MACD_FAST_PERIOD = 12
+MACD_SLOW_PERIOD = 26
 
 
 def compute_ema(values: list[float], period: int = EMA_PERIOD) -> float:
@@ -20,6 +22,27 @@ def compute_ema(values: list[float], period: int = EMA_PERIOD) -> float:
     for value in values[seed_len:]:
         ema = (value - ema) * multiplier + ema
     return ema
+
+
+def compute_macd(values: list[float], fast: int = MACD_FAST_PERIOD, slow: int = MACD_SLOW_PERIOD) -> float:
+    """MACD line (fast EMA minus slow EMA) — used as a binary go/no-go trend filter:
+    "we don't like to trade when the MACD is negative, we're trading against a
+    headwind." With fewer candles than `slow` in the session so far, compute_ema's
+    own partial-data seeding still returns a usable (if rougher) approximation
+    rather than requiring a minimum history."""
+    if not values:
+        return 0.0
+    return compute_ema(values, fast) - compute_ema(values, slow)
+
+
+def compute_vwap(candles: list[Candle]) -> float:
+    """Session-to-date volume-weighted average price. Callers must pass only the
+    current trading day's candles — VWAP resets every session."""
+    total_volume = sum(c.volume for c in candles)
+    if not total_volume:
+        return candles[-1].close if candles else 0.0
+    total_dollar_volume = sum(((c.high + c.low + c.close) / 3) * c.volume for c in candles)
+    return total_dollar_volume / total_volume
 
 
 def build_pullback_setup(symbol: str, scanner: MarketScanner) -> PullbackSetup:
@@ -63,6 +86,8 @@ def build_pullback_setup(symbol: str, scanner: MarketScanner) -> PullbackSetup:
     ]
     closes = [candle.close for candle in candles]
     ema9 = compute_ema(closes)
+    macd = compute_macd(closes)
+    vwap = compute_vwap(candles)
     high_of_day = max(candle.high for candle in candles)
     # The strategy treats candles[:-2] as the prior impulse and candles[-2] as the
     # pullback bar itself, so its low is the natural pullback_low.
@@ -75,6 +100,8 @@ def build_pullback_setup(symbol: str, scanner: MarketScanner) -> PullbackSetup:
         candidate=candidate,
         candles=candles,
         ema9=round(ema9, 4),
+        macd=round(macd, 4),
+        vwap=round(vwap, 4),
         high_of_day=high_of_day,
         pullback_low=pullback_low,
         proposed_entry=proposed_entry,

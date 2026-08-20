@@ -18,6 +18,12 @@ class BotStatus(BaseModel):
     last_message: str = "Idle"
     trades_today: int = 0
     daily_pnl: float = 0.0
+    auto_trading_enabled: bool = False
+    last_automation_run_at: str | None = None
+    peak_daily_pnl: float = 0.0
+    consecutive_losses: int = 0
+    walked_away_for_day: bool = False
+    walk_away_reason: str | None = None
 
 
 class TradeRequest(BaseModel):
@@ -60,6 +66,8 @@ class PullbackSetup(BaseModel):
     candidate: StockCandidate
     candles: list[Candle]
     ema9: float
+    macd: float
+    vwap: float
     high_of_day: float
     pullback_low: float
     proposed_entry: float

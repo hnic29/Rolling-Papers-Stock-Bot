@@ -229,29 +229,27 @@ form {
   gap: 10px;
 }
 
-.asset-class-toggle {
-  display: flex;
-  gap: 4px;
-}
-
-.asset-btn {
-  background: rgba(190, 213, 230, 0.08);
-  border: 1px solid rgba(190, 213, 230, 0.16);
-  border-radius: 4px;
-  color: #a8b9c8;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 8px 14px;
-}
-
-.asset-btn:hover {
-  background: rgba(190, 213, 230, 0.16);
-}
-
-.asset-btn.active {
-  background: #ffd166;
-  border-color: #ffd166;
+#start[aria-pressed="true"] {
+  background: #7cf0b3;
+  border-color: #7cf0b3;
   color: #04140c;
+  font-weight: 600;
+}
+
+#stop {
+  background: #ff9b9b;
+  border-color: #ff9b9b;
+  color: #2a0a0a;
+  font-weight: 600;
+}
+
+.auto-trading-toggle {
+  background: rgba(190, 213, 230, 0.08);
+}
+
+.auto-trading-toggle[aria-pressed="true"] {
+  background: #e0a13f;
+  color: #241a06;
   font-weight: 600;
 }
 

@@ -28,6 +28,16 @@ def test_status_returns_bot_status_shape():
     assert "daily_pnl" in body
 
 
+def test_automation_start_and_stop_toggle_status():
+    start_response = client.post("/api/automation/start")
+    assert start_response.status_code == 200
+    assert start_response.json()["auto_trading_enabled"] is True
+
+    stop_response = client.post("/api/automation/stop")
+    assert stop_response.status_code == 200
+    assert stop_response.json()["auto_trading_enabled"] is False
+
+
 def test_account_returns_400_when_broker_is_unavailable(monkeypatch):
     class UnavailableBroker:
         def __init__(self):
@@ -120,7 +130,7 @@ def test_settings_test_reports_a_working_fmp_key(monkeypatch):
     class WorkingFmp:
         configured = True
 
-        def shares_float(self, symbol):
+        def shares_float(self, symbol, use_cache=True):
             return {"symbol": symbol, "floatShares": 1000000}
 
     monkeypatch.setattr("app.main.AlpacaBroker", UnavailableBroker)
@@ -159,16 +169,6 @@ def test_trade_rejects_a_position_over_the_configured_cap_without_touching_the_b
     )
 
     assert response.status_code == 400
-
-
-def test_backtest_rejects_crypto_symbol_via_http():
-    response = client.post(
-        "/api/backtest",
-        json={"symbol": "BTC/USD", "start": "2026-01-01", "end": "2026-01-02"},
-    )
-
-    assert response.status_code == 400
-    assert "stocks-only" in response.json()["detail"]
 
 
 def test_backtest_runs_end_to_end_over_http(monkeypatch):
@@ -285,3 +285,25 @@ def test_settings_post_writes_only_to_the_env_file_not_elsewhere(monkeypatch, tm
 
     assert response.status_code == 200
     assert "PKNEWTESTKEY000000" in fake_env.read_text(encoding="utf-8")
+
+
+def test_settings_post_strips_a_pasted_label_off_the_key(monkeypatch, tmp_path):
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("", encoding="utf-8")
+    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+
+    response = client.post(
+        "/api/settings",
+        json={
+            "alpaca_api_key": "",
+            "alpaca_secret_key": "",
+            "alpaca_paper": True,
+            "fmp_api_key": "apikey: 4uWwLRKwVkIKwG0PxtqQaJkJAe8gUk2H",
+            "allow_live_trading": False,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = fake_env.read_text(encoding="utf-8")
+    assert "FMP_API_KEY=4uWwLRKwVkIKwG0PxtqQaJkJAe8gUk2H" in saved
+    assert "apikey" not in saved.lower()

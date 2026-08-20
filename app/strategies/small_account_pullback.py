@@ -1,7 +1,8 @@
+from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StrategyDecision, StockCandidate
 
 
-HOT_SECTORS = {"ai", "biotech", "crypto", "china", "chinese tech", "tech"}
+HOT_SECTORS = {"ai", "biotech", "china", "chinese tech", "tech"}
 
 
 class SmallAccountPullbackStrategy:
@@ -16,6 +17,11 @@ class SmallAccountPullbackStrategy:
     preferred_max_price = 20.0
     max_pullback_retrace = 0.5
     large_ask_exit_size = 50_000
+    # MACD's slow EMA isn't meaningfully "warmed up" until the session has at least this
+    # many 1-minute candles — before that, the fast/slow EMAs are computed from an
+    # identical seed average and MACD reads exactly 0, which would reject every early-
+    # session trade. Skip the filter rather than treat an undefined reading as "negative."
+    macd_min_candles = 26
 
     def score_candidate(self, candidate: StockCandidate) -> tuple[int, list[str]]:
         score = 0
@@ -60,11 +66,24 @@ class SmallAccountPullbackStrategy:
             return StrategyDecision(signal=Signal.sell, confidence=0.8, reasons=reasons + pattern_reasons + exit_reasons)
 
         risk = round(setup.proposed_entry - setup.proposed_stop, 4)
+        if risk <= 0:
+            return StrategyDecision(signal=Signal.hold, confidence=0.2, reasons=reasons + pattern_reasons + ["reject: stop leaves no defined risk"])
         target = round(setup.high_of_day, 4)
+
+        # High-of-day is only the *next visible level*, not a cap — winners are held past it
+        # until an exit indicator fires (see exit_indicators). A shallow reward here isn't a
+        # reason to skip the trade, just a note; the 2:1 target is enforced statistically via
+        # risk-based position sizing (settings.risk_per_trade), not a per-trade hard gate.
+        reward_note = (
+            f"reward to next high is only {round((target - setup.proposed_entry) / risk, 1)}:1 — expect to hold past it"
+            if (target - setup.proposed_entry) < settings.min_reward_risk_ratio * risk
+            else f"reward to next high already clears the {settings.min_reward_risk_ratio:.0f}:1 target"
+        )
+
         return StrategyDecision(
             signal=Signal.buy,
             confidence=0.75 if score == 4 else 0.85,
-            reasons=reasons + pattern_reasons,
+            reasons=reasons + pattern_reasons + [reward_note],
             risk_per_share=risk,
             first_target=target,
         )
@@ -88,15 +107,29 @@ class SmallAccountPullbackStrategy:
             return ["reject: pullback retraced more than 50% of the prior move"]
         if setup.proposed_entry <= setup.ema9:
             return ["reject: proposed entry is below the 9 EMA"]
+        if candles[-2].close < setup.vwap:
+            return ["reject: pullback closed below VWAP"]
+        if len(candles) >= self.macd_min_candles and setup.macd <= 0:
+            return ["reject: MACD is negative — trading against the trend"]
         if setup.proposed_stop >= setup.proposed_entry:
             return ["reject: stop must be below entry"]
         if candles[-1].close <= candles[-2].high:
             return ["reject: latest candle has not made a new high"]
 
-        sell_volume = sum(c.volume for c in candles[-3:-1] if c.close < c.open)
-        buy_volume = candles[-1].volume if candles[-1].close > candles[-1].open else 0
-        volume_note = "green candle volume is stronger than recent red candles" if buy_volume >= sell_volume / 2 else "volume confirmation is modest"
-        return ["first pullback is holding above 50% retracement", "entry is above the 9 EMA", "latest candle is making a new high", volume_note]
+        impulse_volume = sum(c.volume for c in candles[:-2] if c.close > c.open) or sum(c.volume for c in candles[:-2])
+        pullback_volume = sum(c.volume for c in candles[-2:-1])
+        if impulse_volume and pullback_volume > impulse_volume:
+            return ["reject: pullback volume is heavier than the volume on the move up"]
+
+        macd_note = "MACD is positive" if len(candles) >= self.macd_min_candles else "not enough session history yet to read MACD"
+        return [
+            "first pullback is holding above 50% retracement",
+            "entry is above the 9 EMA",
+            "pullback held above VWAP",
+            macd_note,
+            "latest candle is making a new high",
+            "volume on the pullback is lighter than the volume on the push",
+        ]
 
     def exit_indicators(self, setup: PullbackSetup) -> list[str]:
         reasons: list[str] = []

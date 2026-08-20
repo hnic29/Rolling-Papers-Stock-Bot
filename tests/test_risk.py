@@ -28,12 +28,6 @@ def test_risk_allows_valid_bracket_order():
     RiskManager().validate(trade, 0, 0)
 
 
-def test_risk_rejects_bracket_order_for_crypto():
-    trade = TradeRequest(symbol="BTC/USD", qty=1, side=Signal.buy, stop_loss_price=60000, take_profit_price=70000)
-    with pytest.raises(ValueError, match="crypto"):
-        RiskManager().validate(trade, 0, 0)
-
-
 def test_risk_rejects_bracket_order_for_fractional_qty():
     trade = TradeRequest(symbol="AAPL", qty=1.5, side=Signal.buy, stop_loss_price=95, take_profit_price=110)
     with pytest.raises(ValueError, match="whole-share"):
