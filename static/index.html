@@ -53,6 +53,7 @@
       <section id="dashboard-view" class="grid view active">
         <nav class="section-nav" id="section-nav" aria-label="Jump to section">
           <a class="section-nav-link" href="#section-status">Status</a>
+          <a class="section-nav-link" href="#section-bankroll">Bankroll</a>
           <a class="section-nav-link" href="#section-clock">Clock</a>
           <a class="section-nav-link" href="#section-order">Order</a>
           <a class="section-nav-link" href="#section-ticker">Ticker</a>
@@ -76,6 +77,30 @@
             <dt>Last automation run</dt><dd id="last-automation-run">-</dd>
           </dl>
           <p class="chart-hint">When on, the bot scans the stock universe on its own every couple of minutes and places bracket trades for real buy signals — no manual clicking needed.</p>
+        </article>
+
+        <article class="panel" id="section-bankroll">
+          <h2>Bankroll <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
+          <p class="chart-hint">Your Alpaca account is treated as savings — the bot only ever trades with what you've explicitly withdrawn here, never your whole balance.</p>
+          <dl>
+            <dt>Trading bankroll</dt><dd id="bankroll-balance">-</dd>
+            <dt>Deployed in open positions</dt><dd id="bankroll-deployed">-</dd>
+            <dt>Available to trade</dt><dd id="bankroll-available">-</dd>
+            <dt>Realized P&amp;L (this bankroll)</dt><dd id="bankroll-pnl">-</dd>
+            <dt>Remaining in savings</dt><dd id="bankroll-savings">-</dd>
+          </dl>
+          <form id="bankroll-withdraw-form" class="bankroll-form">
+            <label>Withdraw from savings <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 2000" required /></label>
+            <button type="submit">Withdraw</button>
+          </form>
+          <form id="bankroll-return-form" class="bankroll-form">
+            <label>Return to savings <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 500" required /></label>
+            <button type="submit">Return</button>
+          </form>
+          <h3>Recent Transactions</h3>
+          <ul id="bankroll-transactions" class="bankroll-transactions">
+            <li>No transactions yet.</li>
+          </ul>
         </article>
 
         <article class="panel" id="section-clock">

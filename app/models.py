@@ -139,6 +139,34 @@ class DashboardAuthUpdate(BaseModel):
     new_password: str
 
 
+class BankrollTransaction(BaseModel):
+    id: int
+    created_at: str
+    kind: str
+    amount: float
+    note: str | None = None
+
+
+class BankrollStatus(BaseModel):
+    bankroll_balance: float
+    deployed_capital: float
+    available_to_trade: float
+    realized_pnl: float
+    savings_balance: float | None = None
+    savings_unavailable_reason: str | None = None
+    transactions: list[BankrollTransaction] = []
+
+
+class BankrollWithdrawRequest(BaseModel):
+    amount: float
+    note: str | None = None
+
+
+class BankrollReturnRequest(BaseModel):
+    amount: float
+    note: str | None = None
+
+
 class BacktestRequest(BaseModel):
     symbol: str
     start: date

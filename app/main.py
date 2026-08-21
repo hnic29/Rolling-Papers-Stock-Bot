@@ -18,13 +18,16 @@ from app.models import (
     AppSettingsUpdate,
     AutoScannerRequest,
     BacktestRequest,
+    BankrollReturnRequest,
+    BankrollStatus,
+    BankrollWithdrawRequest,
     BotStatus,
     DashboardAuthUpdate,
     ScannerRequest,
     TradeRequest,
 )
 from app.paths import resource_path
-from app.services import trade_log
+from app.services import bankroll, trade_log
 from app.services.backtest import run_backtest
 from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
@@ -162,6 +165,60 @@ def update_dashboard_auth(request: DashboardAuthUpdate):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     reload_settings()
     return get_settings()
+
+
+def _bankroll_status() -> BankrollStatus:
+    balance = bankroll.current_bankroll()
+    savings_balance = None
+    savings_unavailable_reason = None
+    try:
+        account_equity = float(AlpacaBroker().account().equity)
+    except BrokerUnavailable as exc:
+        savings_unavailable_reason = str(exc)
+    except Exception as exc:
+        savings_unavailable_reason = f"Could not fetch Alpaca account: {exc}"
+    else:
+        savings_balance = round(account_equity - balance, 2)
+
+    return BankrollStatus(
+        bankroll_balance=balance,
+        deployed_capital=bankroll.deployed_capital(),
+        available_to_trade=bankroll.available_to_trade(),
+        realized_pnl=round(bankroll.realized_pnl(), 2),
+        savings_balance=savings_balance,
+        savings_unavailable_reason=savings_unavailable_reason,
+        transactions=bankroll.transactions(limit=20),
+    )
+
+
+@app.get("/api/bankroll", response_model=BankrollStatus)
+def get_bankroll():
+    return _bankroll_status()
+
+
+@app.post("/api/bankroll/withdraw", response_model=BankrollStatus)
+def withdraw_bankroll(request: BankrollWithdrawRequest):
+    try:
+        account_equity = float(AlpacaBroker().account().equity)
+    except BrokerUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca account: {exc}") from exc
+
+    try:
+        bankroll.record_withdrawal(request.amount, account_equity, note=request.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _bankroll_status()
+
+
+@app.post("/api/bankroll/return", response_model=BankrollStatus)
+def return_bankroll(request: BankrollReturnRequest):
+    try:
+        bankroll.record_return_to_savings(request.amount, note=request.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _bankroll_status()
 
 
 @app.get("/api/settings/test")

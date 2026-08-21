@@ -1034,6 +1034,47 @@ function renderPositions(positions) {
   }).join("");
 }
 
+function formatUsd(value) {
+  if (value === null || value === undefined) return "-";
+  const num = Number(value);
+  const sign = num < 0 ? "-" : "";
+  return `${sign}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function renderBankroll(status) {
+  document.querySelector("#bankroll-balance").textContent = formatUsd(status.bankroll_balance);
+  document.querySelector("#bankroll-deployed").textContent = formatUsd(status.deployed_capital);
+  document.querySelector("#bankroll-available").textContent = formatUsd(status.available_to_trade);
+
+  const pnlEl = document.querySelector("#bankroll-pnl");
+  pnlEl.textContent = formatUsd(status.realized_pnl);
+  pnlEl.className = status.realized_pnl >= 0 ? "up" : "down";
+
+  document.querySelector("#bankroll-savings").textContent =
+    status.savings_balance === null ? status.savings_unavailable_reason || "Unavailable" : formatUsd(status.savings_balance);
+
+  const list = document.querySelector("#bankroll-transactions");
+  if (!status.transactions.length) {
+    list.innerHTML = "<li>No transactions yet.</li>";
+    return;
+  }
+  list.innerHTML = status.transactions
+    .map((txn) => {
+      const isWithdrawal = txn.kind === "withdrawal";
+      const when = new Date(txn.created_at).toLocaleString();
+      const note = txn.note ? ` — ${escapeHtml(txn.note)}` : "";
+      return `<li class="${isWithdrawal ? "up" : "down"}">${isWithdrawal ? "+" : "-"}${formatUsd(txn.amount)} ${
+        isWithdrawal ? "Withdrew" : "Returned"
+      } · ${when}${note}</li>`;
+    })
+    .join("");
+}
+
+async function refreshBankroll() {
+  const status = await api("/api/bankroll");
+  renderBankroll(status);
+}
+
 async function refreshPositions() {
   const response = await api("/api/positions");
   renderPositions(response.positions);
@@ -1591,6 +1632,46 @@ document.querySelector("#backtest-form").addEventListener("submit", async (event
   }
 });
 
+document.querySelector("#bankroll-withdraw-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    const status = await api("/api/bankroll/withdraw", {
+      method: "POST",
+      body: JSON.stringify({ amount: Number(form.amount.value) }),
+    });
+    renderBankroll(status);
+    form.reset();
+    document.querySelector("#message").textContent = "Withdrawal added to your trading bankroll.";
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not withdraw: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+document.querySelector("#bankroll-return-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    const status = await api("/api/bankroll/return", {
+      method: "POST",
+      body: JSON.stringify({ amount: Number(form.amount.value) }),
+    });
+    renderBankroll(status);
+    form.reset();
+    document.querySelector("#message").textContent = "Moved back to savings.";
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not return funds: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
 document.querySelector("#refresh-positions").addEventListener("click", async () => {
   try {
     await refreshPositions();
@@ -1639,6 +1720,9 @@ scanSymbols("AAPL, TSLA, NVDA, AMD, PLTR").catch((error) => {
 refreshPositions().catch((error) => {
   document.querySelector("#message").textContent = error.message;
 });
+refreshBankroll().catch((error) => {
+  document.querySelector("#message").textContent = error.message;
+});
 refreshPerformance().catch((error) => {
   document.querySelector("#message").textContent = error.message;
 });
@@ -1652,6 +1736,7 @@ refreshTradeHistory().catch((error) => {
 const LIVE_REFRESH_INTERVAL_MS = 20000;
 startAutoRefresh(refresh, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPositions, LIVE_REFRESH_INTERVAL_MS);
+startAutoRefresh(refreshBankroll, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPerformance, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(() => refreshQuote(getTickerSymbol()), LIVE_REFRESH_INTERVAL_MS);
 

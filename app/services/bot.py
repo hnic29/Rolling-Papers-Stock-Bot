@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import settings
 from app.models import BotStatus, Signal, TradeRequest
-from app.services import trade_log
+from app.services import bankroll, trade_log
 from app.services.live_setup import build_pullback_setup
 from app.services.risk import RiskManager
 from app.services.scanner import MarketScanner
@@ -95,6 +95,28 @@ class TradingBot:
             self.status.last_message = reason or "No trade signal"
         return self.status
 
+    def _qty_within_bankroll(self, price: float) -> int:
+        """Max shares affordable within what's currently available to trade
+        in the bankroll ledger (app.services.bankroll) — a hard cap
+        independent of, and in addition to, the risk/capital caps above."""
+        available = bankroll.available_to_trade()
+        return int(available // price) if available > 0 and price > 0 else 0
+
+    def _validate_against_bankroll(self, trade: TradeRequest) -> None:
+        """Applies to manual buy orders too, not just the automated loop -
+        the whole point of the bankroll is that nothing opens a new position
+        beyond what was actually "withdrawn," regardless of how the order
+        was submitted."""
+        available = bankroll.available_to_trade()
+        if available <= 0:
+            raise ValueError("No bankroll available. Withdraw funds on the Bankroll panel before placing a trade.")
+        if trade.estimated_price is not None:
+            estimated_cost = trade.qty * trade.estimated_price
+            if estimated_cost > available:
+                raise ValueError(
+                    f"This trade would cost ~${estimated_cost:,.2f}, but only ${available:,.2f} is available in your bankroll."
+                )
+
     def _within_trading_window(self, now: datetime) -> bool:
         local_time = now.astimezone(MARKET_TZ).time()
         return _parse_clock(settings.trading_window_start) <= local_time <= _parse_clock(settings.trading_window_end)
@@ -181,6 +203,10 @@ class TradingBot:
             )
             return self.status
 
+        if bankroll.available_to_trade() <= 0:
+            self.status.last_message = "Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading."
+            return self.status
+
         try:
             broker = AlpacaBroker()
             clock = broker.client.get_clock()
@@ -230,7 +256,9 @@ class TradingBot:
             risk_per_share = setup.proposed_entry - setup.proposed_stop
             qty_by_risk = int(settings.risk_per_trade // risk_per_share) if risk_per_share > 0 else 0
             qty_by_capital = int(settings.max_position_value // setup.proposed_entry)
-            qty = min(qty_by_risk, qty_by_capital) if qty_by_risk else qty_by_capital
+            qty_by_bankroll = self._qty_within_bankroll(setup.proposed_entry)
+            candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
+            qty = min(min(candidates) if candidates else qty_by_capital, qty_by_bankroll)
             if qty < 1:
                 continue
 
@@ -260,6 +288,8 @@ class TradingBot:
     def submit_trade(self, trade: TradeRequest) -> dict:
         self.refresh_status()
         self.risk.validate(trade, self.status.trades_today, self.status.daily_pnl)
+        if trade.side == Signal.buy:
+            self._validate_against_bankroll(trade)
         try:
             broker = AlpacaBroker()
             order = broker.submit_market_order(

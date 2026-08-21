@@ -1,9 +1,19 @@
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.models import PullbackSetup, ScannerResponse, ScannerResult, Signal, StockCandidate, StrategyDecision, TradeRequest
-from app.services import trade_log
+from app.services import bankroll, trade_log
 from app.services.bot import TradingBot
+
+
+def _fund_bankroll(monkeypatch, amount=100_000.0):
+    """These tests exercise other behavior (market-closed checks, order
+    submission, walk-away timing) and aren't about the bankroll feature
+    itself - give them a bankroll large enough to never be the constraint,
+    rather than every one of them needing its own withdrawal setup."""
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: amount)
 
 
 def _candidate(symbol, score=4):
@@ -39,6 +49,7 @@ def test_trades_today_persists_within_same_trading_day():
 
 def test_successful_trade_is_recorded_in_history(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0  # clear of the daily-loss guard for this test
@@ -63,6 +74,58 @@ def test_successful_trade_is_recorded_in_history(tmp_path, monkeypatch):
     assert trades[0]["status"] == "accepted"
 
 
+def test_submit_trade_rejects_a_manual_buy_with_no_bankroll(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+        with pytest.raises(ValueError, match="No bankroll available"):
+            bot.submit_trade(TradeRequest(symbol="AAPL", qty=1, side=Signal.buy))
+
+    MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_submit_trade_rejects_a_manual_buy_that_exceeds_the_bankroll(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 100.0)
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+        # 10 shares @ $50 estimated = $500, well over the $100 available.
+        with pytest.raises(ValueError, match="bankroll"):
+            bot.submit_trade(TradeRequest(symbol="AAPL", qty=10, side=Signal.buy, estimated_price=50.0))
+
+    MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_submit_trade_allows_a_sell_regardless_of_bankroll():
+    """You should always be able to close a position, even with an empty
+    bankroll - the gate only applies to opening new exposure."""
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    fake_order = MagicMock()
+    fake_order.id = "sell-order-1"
+    fake_order.symbol = "AAPL"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker, patch("app.services.bot.bankroll") as MockBankroll:
+        MockBankroll.available_to_trade.return_value = 0.0
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        result = bot.submit_trade(TradeRequest(symbol="AAPL", qty=1, side=Signal.sell))
+
+    assert result["id"] == "sell-order-1"
+
+
 def test_auto_cycle_is_a_no_op_when_auto_trading_is_disabled():
     bot = TradingBot()
     bot.status.auto_trading_enabled = False
@@ -77,6 +140,7 @@ def test_auto_cycle_is_a_no_op_when_auto_trading_is_disabled():
 
 def test_auto_cycle_skips_when_market_is_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -176,6 +240,7 @@ def test_auto_cycle_walks_away_after_an_hour_with_no_trades(monkeypatch, tmp_pat
 
 def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -209,6 +274,7 @@ def test_auto_cycle_stays_paused_once_walked_away_for_the_day(monkeypatch, tmp_p
 
 def test_auto_cycle_places_a_bracket_trade_for_a_real_buy_signal(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -241,6 +307,55 @@ def test_auto_cycle_places_a_bracket_trade_for_a_real_buy_signal(tmp_path, monke
     trades = trade_log.list_trades()
     assert len(trades) == 1
     assert trades[0]["symbol"] == "ACHR"
+
+
+def test_auto_cycle_places_no_trade_when_bankroll_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+        bot.auto_cycle()
+
+    assert "no bankroll available" in bot.status.last_message.lower()
+    MockBroker.return_value.client.get_clock.assert_not_called()  # never even gets to scanning
+
+
+def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    # $5/share entry - $15 available covers only 3 shares, well under what
+    # the risk/capital settings alone would otherwise allow.
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 15.0)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("ACHR")]))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol))
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
+
+    fake_order = MagicMock()
+    fake_order.id = "auto-order-2"
+    fake_order.symbol = "ACHR"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+        args, _ = MockBroker.return_value.submit_market_order.call_args
+        assert args[1] == 3  # int(15.0 // 5.0), not whatever risk/capital sizing alone would pick
 
 
 def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
