@@ -1,7 +1,13 @@
+import os
 from pathlib import Path
 
 
-ENV_PATH = Path(".env")
+# CONFIG_ENV_PATH lets a deployment point this at a persistent location
+# outside the app checkout (see deploy/rolling-papers-bot.service) so a
+# `git pull` during an update never touches it, and so it's the same file
+# app.config's Settings reads on startup - see the comment there for why
+# that consistency matters.
+ENV_PATH = Path(os.environ.get("CONFIG_ENV_PATH", ".env"))
 
 
 def read_env() -> dict[str, str]:

@@ -46,6 +46,12 @@ echo "Updating dependencies..."
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
+# Re-sync the systemd unit itself in case it changed (e.g. a new
+# ReadWritePaths entry or Environment= line) - a plain `git pull` alone
+# wouldn't touch what's already installed at /etc/systemd/system/.
+cp "$APP_DIR/deploy/rolling-papers-bot.service" /etc/systemd/system/rolling-papers-bot.service
+systemctl daemon-reload
+
 echo "Restarting service..."
 systemctl restart "$SERVICE"
 sleep 1

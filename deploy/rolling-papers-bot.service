@@ -8,16 +8,24 @@ Type=simple
 User=rpbot
 Group=rpbot
 WorkingDirectory=/opt/rolling-papers-bot
-EnvironmentFile=/etc/rolling-papers-bot/rolling-papers-bot.env
+# Deliberately NOT EnvironmentFile= here - that would inject these as real OS
+# env vars, which pydantic-settings always prefers over a .env file no matter
+# what CONFIG_ENV_PATH points at, permanently shadowing any change the
+# dashboard's Settings page writes at runtime. CONFIG_ENV_PATH just tells the
+# app which dotenv-style file to read/write itself - a save takes effect
+# immediately on the next request, no restart needed.
+Environment=CONFIG_ENV_PATH=/etc/rolling-papers-bot/rolling-papers-bot.env
 ExecStart=/opt/rolling-papers-bot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 
-# Light sandboxing — the service only needs its own install dir and the
-# separate state dir the trade log lives in (see TRADE_LOG_PATH).
+# Light sandboxing — the service only needs its own install dir, the
+# persistent config file (see CONFIG_ENV_PATH), and the trade-log state dir
+# (see TRADE_LOG_PATH). Both live outside /opt/rolling-papers-bot so a
+# `git pull` during an update never touches them.
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/rolling-papers-bot
+ReadWritePaths=/var/lib/rolling-papers-bot /etc/rolling-papers-bot
 
 [Install]
 WantedBy=multi-user.target

@@ -96,6 +96,12 @@ if ! command -v pct >/dev/null 2>&1; then
     "$APP_DIR/.venv/bin/pip" install --no-cache-dir --quiet -r "$APP_DIR/requirements.txt"
     chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
+    # Re-sync the systemd unit itself in case it changed (e.g. a new
+    # ReadWritePaths entry or Environment= line) - a plain `git pull` alone
+    # wouldn't touch what's already installed at /etc/systemd/system/.
+    cp "$APP_DIR/deploy/rolling-papers-bot.service" /etc/systemd/system/rolling-papers-bot.service
+    systemctl daemon-reload
+
     systemctl restart "$SERVICE"
     sleep 1
     systemctl --no-pager --lines=0 status "$SERVICE"

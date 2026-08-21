@@ -1,4 +1,14 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Deliberately the SAME env var (and same default) as app.services.env_file's
+# ENV_PATH - both must point at the same file, or a save from the dashboard's
+# Settings page (which writes via env_file.write_env) would never be visible
+# to Settings() re-reading a different one. A deployment sets this via
+# systemd Environment= rather than putting it inside the file itself, which
+# would be a chicken-and-egg problem.
+_ENV_FILE_PATH = os.environ.get("CONFIG_ENV_PATH", ".env")
 
 
 class Settings(BaseSettings):
@@ -25,7 +35,7 @@ class Settings(BaseSettings):
     dashboard_username: str = ""
     dashboard_password: str = ""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE_PATH, env_file_encoding="utf-8")
 
 
 settings = Settings()
