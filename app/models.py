@@ -120,6 +120,7 @@ class AppSettingsResponse(BaseModel):
     alpaca_paper: bool = True
     fmp_api_key: str = ""
     allow_live_trading: bool = False
+    dashboard_username: str = ""
 
 
 class AppSettingsUpdate(BaseModel):
@@ -128,6 +129,14 @@ class AppSettingsUpdate(BaseModel):
     alpaca_paper: bool = True
     fmp_api_key: str = ""
     allow_live_trading: bool = False
+
+
+class DashboardAuthUpdate(BaseModel):
+    # Blank current_password is only accepted when no dashboard password is
+    # configured yet - see the check in main.update_dashboard_auth.
+    current_password: str = ""
+    new_username: str
+    new_password: str
 
 
 class BacktestRequest(BaseModel):

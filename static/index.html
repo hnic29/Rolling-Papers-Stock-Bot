@@ -349,6 +349,20 @@
           </form>
           <ul id="connection-test-results" class="connection-test-results" hidden></ul>
         </article>
+
+        <article class="panel settings-panel">
+          <h2>Dashboard Login</h2>
+          <p class="chart-hint" id="dashboard-auth-hint">
+            Not set up yet — anyone who can reach this dashboard can use it without logging in. Set a username and password below to require login.
+          </p>
+          <form id="dashboard-auth-form" class="settings-form">
+            <label id="current-password-row">Current password <input name="current_password" type="password" autocomplete="current-password" /></label>
+            <label>Username <input name="new_username" autocomplete="username" required /></label>
+            <label>New password <input name="new_password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <label>Confirm new password <input name="confirm_password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <button type="submit">Update Login</button>
+          </form>
+        </article>
       </section>
     </main>
 

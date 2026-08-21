@@ -1,5 +1,6 @@
 import asyncio
 import re
+import secrets
 from contextlib import asynccontextmanager
 
 from alpaca.common.enums import Sort
@@ -18,6 +19,7 @@ from app.models import (
     AutoScannerRequest,
     BacktestRequest,
     BotStatus,
+    DashboardAuthUpdate,
     ScannerRequest,
     TradeRequest,
 )
@@ -111,6 +113,9 @@ def get_settings():
         alpaca_paper=values.get("ALPACA_PAPER", "true").lower() == "true",
         fmp_api_key=mask_secret(values.get("FMP_API_KEY", "")),
         allow_live_trading=values.get("ALLOW_LIVE_TRADING", "false").lower() == "true",
+        # Never the password - write-only, only ever set via
+        # update_dashboard_auth(), never echoed back once configured.
+        dashboard_username=values.get("DASHBOARD_USERNAME", ""),
     )
 
 
@@ -129,6 +134,30 @@ def save_settings(request: AppSettingsUpdate):
 
     try:
         write_env(updates)
+    except InvalidEnvValue as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    reload_settings()
+    return get_settings()
+
+
+@app.post("/api/settings/dashboard-auth", response_model=AppSettingsResponse)
+def update_dashboard_auth(request: DashboardAuthUpdate):
+    # BasicAuthMiddleware already requires valid credentials to reach this
+    # route at all once auth is on - this check is defense in depth on top
+    # of that (e.g. a browser tab left logged in), and the only way to set
+    # up auth for the first time when it's currently off.
+    if settings.dashboard_username:
+        if not secrets.compare_digest(request.current_password, settings.dashboard_password):
+            raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    new_username = request.new_username.strip()
+    if not new_username:
+        raise HTTPException(status_code=400, detail="Username can't be empty.")
+    if len(request.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+
+    try:
+        write_env({"DASHBOARD_USERNAME": new_username, "DASHBOARD_PASSWORD": request.new_password})
     except InvalidEnvValue as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     reload_settings()

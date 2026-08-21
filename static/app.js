@@ -257,6 +257,15 @@ async function loadSettings() {
     form.fmp_api_key.value = settings.fmp_api_key;
     form.alpaca_paper.checked = settings.alpaca_paper;
     form.allow_live_trading.checked = settings.allow_live_trading;
+
+    const authForm = document.querySelector("#dashboard-auth-form");
+    const hasAuth = Boolean(settings.dashboard_username);
+    authForm.new_username.value = settings.dashboard_username || "";
+    document.querySelector("#current-password-row").hidden = !hasAuth;
+    authForm.current_password.required = hasAuth;
+    document.querySelector("#dashboard-auth-hint").textContent = hasAuth
+      ? "Login is required to use this dashboard. Enter your current password to change it."
+      : "Not set up yet — anyone who can reach this dashboard can use it without logging in. Set a username and password below to require login.";
   } catch (error) {
     document.querySelector("#message").textContent = `Could not load settings: ${error.message}`;
   }
@@ -1366,6 +1375,38 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
     await checkApiKeysConfigured();
   } catch (error) {
     document.querySelector("#message").textContent = `Could not save settings: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+document.querySelector("#dashboard-auth-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+
+  if (form.new_password.value !== form.confirm_password.value) {
+    document.querySelector("#message").textContent = "New password and confirmation don't match.";
+    return;
+  }
+
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await api("/api/settings/dashboard-auth", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: form.current_password.value,
+        new_username: form.new_username.value,
+        new_password: form.new_password.value,
+      }),
+    });
+    form.current_password.value = "";
+    form.new_password.value = "";
+    form.confirm_password.value = "";
+    document.querySelector("#message").textContent = "Dashboard login updated — you'll be asked to log in again with your new credentials.";
+    await loadSettings();
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not update dashboard login: ${error.message}`;
   } finally {
     if (submitButton) submitButton.disabled = false;
   }
