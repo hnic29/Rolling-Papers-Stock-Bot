@@ -1,12 +1,33 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time as dtime, timedelta
 import csv
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import ScannerResponse, ScannerResult, Signal, StockCandidate
 from app.paths import resource_path
 from app.services.fmp import FmpClient
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
+
+MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_OPEN = dtime(9, 30)
+MARKET_CLOSE = dtime(16, 0)
+TRADING_SESSION_MINUTES = 390  # 9:30-16:00 ET
+
+
+def _session_progress_fraction(now: datetime) -> float:
+    """How far into today's regular session `now` falls, as a fraction of a full trading
+    day. The daily bar Alpaca returns for "today" is a partial, still-forming bar during
+    market hours - comparing its volume-so-far directly against prior days' *full-day*
+    average volume systematically understates relative volume any time before the close
+    (a stock trading at its normal pace reads as a small fraction of "average" at 10am,
+    not because it's quiet, but because the day isn't over yet). Prorating the historical
+    average down to the same point in the session fixes that."""
+    local = now.astimezone(MARKET_TZ)
+    if local.weekday() >= 5 or local.time() < MARKET_OPEN or local.time() >= MARKET_CLOSE:
+        return 1.0  # no partial bar in progress - the latest bar is already a full day
+    elapsed_minutes = (local.hour * 60 + local.minute) - (MARKET_OPEN.hour * 60 + MARKET_OPEN.minute)
+    return max(elapsed_minutes / TRADING_SESSION_MINUTES, 0.05)
 
 
 class MarketScanner:
@@ -27,6 +48,7 @@ class MarketScanner:
         bars = broker.daily_bars(clean_symbols, start=start, end=end)
         metadata = self.load_metadata()
         news = self._safe_news(broker, clean_symbols, start=end - timedelta(days=3), end=end)
+        session_progress = _session_progress_fraction(end)
         results: list[ScannerResult] = []
 
         for symbol in clean_symbols:
@@ -39,16 +61,32 @@ class MarketScanner:
             price = float(latest.close)
             previous_close = float(previous.close)
             percent_change = ((price - previous_close) / previous_close) * 100 if previous_close else 0.0
-            avg_volume = sum(int(bar.volume or 0) for bar in symbol_bars[:-1]) / max(len(symbol_bars) - 1, 1)
+            full_day_avg_volume = sum(int(bar.volume or 0) for bar in symbol_bars[:-1]) / max(len(symbol_bars) - 1, 1)
+            avg_volume = full_day_avg_volume * session_progress
             total_volume = int(latest.volume or 0)
             relative_volume = total_volume / avg_volume if avg_volume else None
 
             quote = self._safe_quote(broker, symbol)
             symbol_metadata = metadata.get(symbol, {})
             latest_news = news.get(symbol)
-            fmp_float = self._safe_float(symbol)
-            float_shares = fmp_float.get("float_shares") if fmp_float else symbol_metadata.get("float_shares")
             sector = symbol_metadata.get("sector")
+
+            # FMP's float-share quota is small and shared across every symbol this scanner
+            # ever looks at - spending it on a symbol that's already failing the cheap,
+            # locally-computable pillars wastes it on something that can't qualify anyway.
+            # Only look up float once a symbol already clears enough of the rest to make
+            # float the deciding pillar.
+            cheap_pillars = sum([
+                relative_volume is not None and relative_volume >= self.strategy.min_relative_volume,
+                total_volume >= self.strategy.min_total_volume,
+                percent_change >= self.strategy.min_percent_change,
+                self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price,
+            ])
+            if cheap_pillars >= 3:
+                fmp_float = self._safe_float(symbol)
+                float_shares = fmp_float.get("float_shares") if fmp_float else symbol_metadata.get("float_shares")
+            else:
+                float_shares = symbol_metadata.get("float_shares")
             candidate = StockCandidate(
                 symbol=symbol,
                 price=price,

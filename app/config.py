@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     fmp_api_key: str = ""
     automation_interval_seconds: int = 120
     automation_scan_limit: int = 10
-    automation_max_symbols: int = 30
+    # The curated universe list (data/stock_universe.txt) is ~110 symbols; this used to
+    # default to 30, silently scanning only the same alphabetical first slice of it every
+    # cycle and never looking at the rest. 150 gives headroom above the current list size.
+    automation_max_symbols: int = 150
     risk_per_trade: float = 200.0
     min_reward_risk_ratio: float = 2.0
     trading_window_start: str = "07:00"
