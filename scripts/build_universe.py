@@ -34,7 +34,12 @@ METADATA_PATH = ROOT / "data" / "symbol_metadata.csv"
 
 MIN_PRICE = 2.0
 MAX_PRICE = 20.0
-MIN_AVG_VOLUME = 1_000_000
+# NOT the strategy's real min_total_volume (1M) - a genuine low-float runner is usually
+# quiet most days and only spikes to millions of shares on the day it actually moves, so
+# requiring a sustained 30-day *average* of 1M would select for the opposite profile
+# (steadily-liquid, usually higher-float names). This floor only exists to exclude
+# truly dead/halted tickers; the live scanner already checks TODAY's volume for real.
+MIN_AVG_VOLUME = 50_000
 # A little headroom over the strategy's 20M float gate - a live scan's own float check
 # (now backed by this same metadata CSV) is still the final word on any given day; this
 # screen just needs to build a plausible candidate pool, not make the final call.
@@ -121,6 +126,15 @@ def main() -> None:
     print("\nChecking float on survivors (this is the slow part)...", flush=True)
     matches = screen_by_float(price_volume_survivors)
     print(f"\n{len(matches)} symbols clear float (<= {MAX_FLOAT:,} shares) too - these are the real candidates", flush=True)
+
+    if len(matches) < 10:
+        print(
+            f"\nOnly {len(matches)} matches - that's suspiciously low and more likely a screening "
+            "problem (bad filter, blocked/rate-limited lookups) than reality. Not overwriting the "
+            "existing universe/metadata files - investigate before re-running.",
+            flush=True,
+        )
+        return
 
     UNIVERSE_PATH.write_text(
         "# Built by scripts/build_universe.py - live-screened for price $2-$20, "
