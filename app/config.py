@@ -35,7 +35,16 @@ class Settings(BaseSettings):
     dashboard_username: str = ""
     dashboard_password: str = ""
 
-    model_config = SettingsConfigDict(env_file=_ENV_FILE_PATH, env_file_encoding="utf-8")
+    # extra="ignore": pydantic-settings' default is to reject any dotenv-file
+    # key with no matching field. TRADE_LOG_PATH (read directly via os.environ
+    # in app.services.trade_log, deliberately not a Settings field) lives in
+    # the same file as everything else here — without this, its mere presence
+    # crashes the app at import time with a ValidationError. Real env vars
+    # were never validated this strictly (pydantic-settings only pulls the
+    # ones matching a declared field), so this restores that same leniency
+    # for the dotenv-file source and guards against the same class of bug
+    # for any future deploy-only var that ends up in this file.
+    model_config = SettingsConfigDict(env_file=_ENV_FILE_PATH, env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()
