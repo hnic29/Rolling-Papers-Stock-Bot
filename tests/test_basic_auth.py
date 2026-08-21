@@ -29,6 +29,10 @@ def test_dashboard_requires_auth_once_configured(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 401
+    # Must be JSON (not plain text) - the dashboard's own fetch() calls parse
+    # every response as JSON and would throw on an unparseable 401 body,
+    # which is exactly what broke settings save/test before this was fixed.
+    assert response.json() == {"detail": "Authentication required"}
     assert response.headers["www-authenticate"].lower().startswith("basic")
 
 

@@ -3,7 +3,7 @@ import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse
 
 from app.config import settings
 
@@ -26,9 +26,14 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if self._is_authorized(request.headers.get("authorization")):
             return await call_next(request)
 
-        return Response(
+        # JSON body (not plain text) so the dashboard's own fetch-based API calls
+        # can parse the response instead of throwing on `response.json()` — the
+        # browser's native Basic Auth login prompt is triggered by the 401 status
+        # + WWW-Authenticate header regardless of body content type, so this
+        # doesn't change that behavior for a plain page load.
+        return JSONResponse(
             status_code=401,
-            content="Authentication required",
+            content={"detail": "Authentication required"},
             headers={"WWW-Authenticate": 'Basic realm="Rolling Papers Bot"'},
         )
 

@@ -3,8 +3,14 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "Request failed");
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    // Non-JSON body (e.g. an upstream proxy's error page) - fall through with
+    // no parsed data rather than throwing an unhelpful "Unexpected token" error.
+  }
+  if (!response.ok) throw new Error(data?.detail || `Request failed (${response.status})`);
   return data;
 }
 
@@ -243,13 +249,17 @@ function switchView(name) {
 }
 
 async function loadSettings() {
-  const settings = await api("/api/settings");
-  const form = document.querySelector("#settings-form");
-  form.alpaca_api_key.value = settings.alpaca_api_key;
-  form.alpaca_secret_key.value = settings.alpaca_secret_key;
-  form.fmp_api_key.value = settings.fmp_api_key;
-  form.alpaca_paper.checked = settings.alpaca_paper;
-  form.allow_live_trading.checked = settings.allow_live_trading;
+  try {
+    const settings = await api("/api/settings");
+    const form = document.querySelector("#settings-form");
+    form.alpaca_api_key.value = settings.alpaca_api_key;
+    form.alpaca_secret_key.value = settings.alpaca_secret_key;
+    form.fmp_api_key.value = settings.fmp_api_key;
+    form.alpaca_paper.checked = settings.alpaca_paper;
+    form.allow_live_trading.checked = settings.allow_live_trading;
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not load settings: ${error.message}`;
+  }
 }
 
 async function checkApiKeysConfigured() {
@@ -1336,21 +1346,29 @@ document.querySelectorAll(".tab").forEach((tab) => {
 document.querySelector("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  const settings = await api("/api/settings", {
-    method: "POST",
-    body: JSON.stringify({
-      alpaca_api_key: form.alpaca_api_key.value,
-      alpaca_secret_key: form.alpaca_secret_key.value,
-      fmp_api_key: form.fmp_api_key.value,
-      alpaca_paper: form.alpaca_paper.checked,
-      allow_live_trading: form.allow_live_trading.checked,
-    }),
-  });
-  form.alpaca_api_key.value = settings.alpaca_api_key;
-  form.alpaca_secret_key.value = settings.alpaca_secret_key;
-  form.fmp_api_key.value = settings.fmp_api_key;
-  document.querySelector("#message").textContent = "Settings saved";
-  await checkApiKeysConfigured();
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    const settings = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        alpaca_api_key: form.alpaca_api_key.value,
+        alpaca_secret_key: form.alpaca_secret_key.value,
+        fmp_api_key: form.fmp_api_key.value,
+        alpaca_paper: form.alpaca_paper.checked,
+        allow_live_trading: form.allow_live_trading.checked,
+      }),
+    });
+    form.alpaca_api_key.value = settings.alpaca_api_key;
+    form.alpaca_secret_key.value = settings.alpaca_secret_key;
+    form.fmp_api_key.value = settings.fmp_api_key;
+    document.querySelector("#message").textContent = "Settings saved";
+    await checkApiKeysConfigured();
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not save settings: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 });
 
 document.querySelector("#setup-banner-settings-link").addEventListener("click", async () => {
