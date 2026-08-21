@@ -167,6 +167,31 @@ class TradingBot:
                 self.status.walked_away_for_day = True
                 self.status.walk_away_reason = f"no trade taken in over {settings.max_minutes_without_trade} minutes — momentum has cooled"
 
+    def _manage_open_positions(self, positions: list[dict]) -> list[str]:
+        """This is what actually delivers "winners are held past the first target until
+        an exit indicator fires" (see the reward_note in SmallAccountPullbackStrategy.evaluate):
+        an auto-entered buy only ever rests a stop-loss at the broker, no take-profit, so
+        nothing caps a winner automatically. Every cycle, each held position gets re-checked
+        against the same exit_indicators() a fresh evaluation would use — level-two selling
+        pressure, a topping-tail candle, a red candle — and gets closed the moment one fires.
+        Runs before the walk-away/trading-window/bankroll gates in auto_cycle, since managing
+        risk that's already open is never something those should block."""
+        exited: list[str] = []
+        for position in positions:
+            symbol = position.get("symbol")
+            qty = position.get("qty")
+            if not symbol or not qty:
+                continue
+            try:
+                setup = build_pullback_setup(symbol, self.scanner)
+                if not self.strategy.exit_indicators(setup):
+                    continue
+                self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell))
+                exited.append(symbol)
+            except Exception:
+                continue  # a single bad symbol/order should never stall managing the rest
+        return exited
+
     def start_auto_trading(self) -> BotStatus:
         self.refresh_status()
         self.status.auto_trading_enabled = True
@@ -182,30 +207,16 @@ class TradingBot:
         return self.status
 
     def auto_cycle(self) -> BotStatus:
-        """One automation pass: scan the universe, evaluate real pullback setups for anything
-        that clears the scoring gate, and submit bracket trades for genuine buy signals. Reuses
-        submit_trade() so every existing risk guard (daily loss, trade cap, position cap, paper/live
-        gating) applies exactly as it does to a manually submitted order."""
+        """One automation pass: manage existing positions first (close anything tripping
+        an exit indicator - see _manage_open_positions), then scan the universe and submit
+        bracket trades for genuine new buy signals. Reuses submit_trade() so every existing
+        risk guard (daily loss, trade cap, position cap, paper/live gating) applies exactly
+        as it does to a manually submitted order."""
         self.refresh_status()
         if not self.status.auto_trading_enabled:
             return self.status
 
         self.status.last_automation_run_at = datetime.now(UTC).isoformat()
-
-        self._update_session_state()
-        if self.status.walked_away_for_day:
-            self.status.last_message = f"Auto-trading paused for the day — {self.status.walk_away_reason}"
-            return self.status
-
-        if not self._within_trading_window(datetime.now(UTC)):
-            self.status.last_message = (
-                f"Auto-trading idle — outside the {settings.trading_window_start}-{settings.trading_window_end} trading window"
-            )
-            return self.status
-
-        if bankroll.available_to_trade() <= 0:
-            self.status.last_message = "Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading."
-            return self.status
 
         try:
             broker = AlpacaBroker()
@@ -222,12 +233,35 @@ class TradingBot:
             return self.status
 
         try:
-            held_symbols = {position["symbol"] for position in broker.positions_as_dicts()}
+            held_positions = broker.positions_as_dicts()
         except Exception:
-            held_symbols = set()
+            held_positions = []
+        held_symbols = {position["symbol"] for position in held_positions}
+
+        exited = self._manage_open_positions(held_positions)
+
+        self._update_session_state()
+        if self.status.walked_away_for_day:
+            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
+            self.status.last_message = f"Auto-trading paused for new entries — {self.status.walk_away_reason}{suffix}"
+            return self.status
+
+        if not self._within_trading_window(datetime.now(UTC)):
+            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
+            self.status.last_message = (
+                f"Auto-trading idle — outside the {settings.trading_window_start}-{settings.trading_window_end} trading window{suffix}"
+            )
+            return self.status
+
+        if bankroll.available_to_trade() <= 0:
+            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
+            self.status.last_message = (
+                f"Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading.{suffix}"
+            )
+            return self.status
 
         try:
-            candidates = self.scanner.scan_universe(
+            scan_results = self.scanner.scan_universe(
                 limit=settings.automation_scan_limit,
                 max_symbols=settings.automation_max_symbols,
             ).results
@@ -238,7 +272,7 @@ class TradingBot:
             self.status.last_message = f"Automation scan failed: {exc}"
             return self.status
 
-        qualifying = [c for c in candidates if c.score >= 4 and c.symbol not in held_symbols]
+        qualifying = [c for c in scan_results if c.score >= 4 and c.symbol not in held_symbols]
 
         traded: list[str] = []
         skipped: list[str] = []
@@ -257,18 +291,20 @@ class TradingBot:
             qty_by_risk = int(settings.risk_per_trade // risk_per_share) if risk_per_share > 0 else 0
             qty_by_capital = int(settings.max_position_value // setup.proposed_entry)
             qty_by_bankroll = self._qty_within_bankroll(setup.proposed_entry)
-            candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
-            qty = min(min(candidates) if candidates else qty_by_capital, qty_by_bankroll)
+            size_candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
+            qty = min(min(size_candidates) if size_candidates else qty_by_capital, qty_by_bankroll)
             if qty < 1:
                 continue
 
+            # No take_profit_price here on purpose - only the stop-loss rests at the
+            # broker, so a winner isn't automatically capped at the first target. See
+            # _manage_open_positions for what actually closes the position later.
             trade = TradeRequest(
                 symbol=candidate.symbol,
                 qty=qty,
                 side=Signal.buy,
                 estimated_price=setup.proposed_entry,
                 stop_loss_price=setup.proposed_stop,
-                take_profit_price=decision.first_target,
             )
             try:
                 self.submit_trade(trade)
@@ -277,12 +313,18 @@ class TradingBot:
                 skipped.append(f"{candidate.symbol} ({exc})")
                 continue
 
+        parts = []
+        if exited:
+            parts.append(f"closed {', '.join(exited)} on an exit signal")
         if traded:
-            self.status.last_message = f"Auto-trading placed orders: {', '.join(traded)}"
-        elif skipped:
-            self.status.last_message = f"Auto-trading found signals but skipped them: {'; '.join(skipped)}"
-        else:
-            self.status.last_message = f"Auto-trading scanned {len(candidates)} symbols — no qualifying buy signals"
+            parts.append(f"opened {', '.join(traded)}")
+        if skipped:
+            parts.append(f"skipped {'; '.join(skipped)}")
+        self.status.last_message = (
+            "Auto-trading: " + "; ".join(parts)
+            if parts
+            else f"Auto-trading scanned {len(scan_results)} symbols — no qualifying buy signals"
+        )
         return self.status
 
     def submit_trade(self, trade: TradeRequest) -> dict:
