@@ -37,6 +37,20 @@
 
       <nav class="tabs">
         <button class="tab active" data-view="dashboard">Dashboard</button>
+        <button class="tab" data-view="bankroll">
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 10l9-6 9 6" />
+              <path d="M4 10v10" />
+              <path d="M20 10v10" />
+              <path d="M8 10v10" />
+              <path d="M12 10v10" />
+              <path d="M16 10v10" />
+              <path d="M2 20h20" />
+            </svg>
+          </span>
+          Bankroll
+        </button>
         <button class="tab" data-view="backtest">Backtest</button>
         <button class="tab" data-view="settings">Settings</button>
       </nav>
@@ -53,7 +67,6 @@
       <section id="dashboard-view" class="grid view active">
         <nav class="section-nav" id="section-nav" aria-label="Jump to section">
           <a class="section-nav-link" href="#section-status">Status</a>
-          <a class="section-nav-link" href="#section-bankroll">Bankroll</a>
           <a class="section-nav-link" href="#section-clock">Clock</a>
           <a class="section-nav-link" href="#section-order">Order</a>
           <a class="section-nav-link" href="#section-ticker">Ticker</a>
@@ -77,30 +90,6 @@
             <dt>Last automation run</dt><dd id="last-automation-run">-</dd>
           </dl>
           <p class="chart-hint">When on, the bot scans the stock universe on its own every couple of minutes and places bracket trades for real buy signals — no manual clicking needed.</p>
-        </article>
-
-        <article class="panel" id="section-bankroll">
-          <h2>Bankroll <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span></h2>
-          <p class="chart-hint">Your Alpaca account is treated as savings — the bot only ever trades with what you've explicitly withdrawn here, never your whole balance.</p>
-          <dl>
-            <dt>Trading bankroll</dt><dd id="bankroll-balance">-</dd>
-            <dt>Deployed in open positions</dt><dd id="bankroll-deployed">-</dd>
-            <dt>Available to trade</dt><dd id="bankroll-available">-</dd>
-            <dt>Realized P&amp;L (this bankroll)</dt><dd id="bankroll-pnl">-</dd>
-            <dt>Remaining in savings</dt><dd id="bankroll-savings">-</dd>
-          </dl>
-          <form id="bankroll-withdraw-form" class="bankroll-form">
-            <label>Withdraw from savings <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 2000" required /></label>
-            <button type="submit">Withdraw</button>
-          </form>
-          <form id="bankroll-return-form" class="bankroll-form">
-            <label>Return to savings <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 500" required /></label>
-            <button type="submit">Return</button>
-          </form>
-          <h3>Recent Transactions</h3>
-          <ul id="bankroll-transactions" class="bankroll-transactions">
-            <li>No transactions yet.</li>
-          </ul>
         </article>
 
         <article class="panel" id="section-clock">
@@ -291,6 +280,73 @@
               </tbody>
             </table>
           </div>
+        </article>
+      </section>
+
+      <section id="bankroll-view" class="view bankroll-view">
+        <article class="panel bank-hero">
+          <div class="bank-hero-top">
+            <div class="bank-account-label">
+              <span class="bank-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 10l9-6 9 6" />
+                  <path d="M4 10v10" />
+                  <path d="M20 10v10" />
+                  <path d="M8 10v10" />
+                  <path d="M12 10v10" />
+                  <path d="M16 10v10" />
+                  <path d="M2 20h20" />
+                </svg>
+              </span>
+              <div>
+                <h2 class="bank-account-name">Trading Bankroll</h2>
+                <p class="bank-account-sub">Funded from your Alpaca paper account, on your terms</p>
+              </div>
+            </div>
+            <span class="live-badge" title="Refreshes automatically every 20 seconds — paused when this tab isn't visible">Live</span>
+          </div>
+          <p class="bank-hero-balance" id="bankroll-balance">-</p>
+          <div class="bank-hero-stats">
+            <div><span>Available to trade</span><strong id="bankroll-available">-</strong></div>
+            <div><span>Deployed in positions</span><strong id="bankroll-deployed">-</strong></div>
+            <div><span>Realized P&amp;L</span><strong id="bankroll-pnl">-</strong></div>
+          </div>
+          <p class="chart-hint">Your Alpaca account is treated as savings — the bot only ever trades with what you've explicitly withdrawn into this bankroll, never your whole balance.</p>
+        </article>
+
+        <article class="panel bank-savings">
+          <h2>Linked Savings</h2>
+          <div class="bank-savings-row">
+            <div>
+              <p class="bank-savings-label">Alpaca paper account balance</p>
+              <p class="bank-savings-balance" id="bankroll-savings">-</p>
+            </div>
+            <p class="chart-hint">Untouched by the bot until you transfer funds into your trading bankroll.</p>
+          </div>
+        </article>
+
+        <article class="panel bank-transfer">
+          <h2>Move Money</h2>
+          <p class="chart-hint">Treat this like a real bank transfer — the bot can only ever trade with what's sitting in your trading bankroll.</p>
+          <div class="bank-transfer-grid">
+            <form id="bankroll-withdraw-form" class="bankroll-form transfer-card transfer-in">
+              <p class="transfer-card-title">Savings &rarr; Trading Bankroll</p>
+              <label>Amount <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 2000" required /></label>
+              <button type="submit">Withdraw to Bankroll</button>
+            </form>
+            <form id="bankroll-return-form" class="bankroll-form transfer-card transfer-out">
+              <p class="transfer-card-title">Trading Bankroll &rarr; Savings</p>
+              <label>Amount <input name="amount" type="number" min="0.01" step="0.01" placeholder="e.g. 500" required /></label>
+              <button type="submit">Return to Savings</button>
+            </form>
+          </div>
+        </article>
+
+        <article class="panel bank-statement">
+          <h2>Statement</h2>
+          <ul id="bankroll-transactions" class="bankroll-transactions">
+            <li class="txn-empty">No transactions yet.</li>
+          </ul>
         </article>
       </section>
 

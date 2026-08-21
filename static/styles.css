@@ -296,11 +296,25 @@ form {
 }
 
 .tab {
+  align-items: center;
   background: rgba(4, 11, 19, 0.74);
+  display: inline-flex;
+  gap: 7px;
 }
 
 .tab.active {
   background: #0e5664;
+}
+
+.tab-icon {
+  align-items: center;
+  display: inline-flex;
+}
+
+.tab-icon svg {
+  display: block;
+  height: 15px;
+  width: 15px;
 }
 
 .setup-banner {
@@ -439,6 +453,257 @@ select {
   background: #7cf0b3;
   border-color: #7cf0b3;
   color: #04140c;
+}
+
+.bankroll-view {
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bank-hero,
+.bank-statement {
+  grid-column: 1 / -1;
+}
+
+.bank-hero-top {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.bank-account-label {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.bank-icon {
+  align-items: center;
+  background: rgba(124, 240, 179, 0.12);
+  border: 1px solid rgba(124, 240, 179, 0.35);
+  border-radius: 10px;
+  color: #7cf0b3;
+  display: flex;
+  flex-shrink: 0;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.bank-icon svg {
+  height: 22px;
+  width: 22px;
+}
+
+.bank-account-name {
+  font-size: 16px;
+  margin: 0 0 2px;
+}
+
+.bank-account-sub {
+  color: #7f93a4;
+  font-size: 12px;
+  margin: 0;
+}
+
+.bank-hero-balance {
+  font-size: 48px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 14px 0 20px;
+}
+
+.bank-hero-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.bank-hero-stats div {
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.bank-hero-stats span {
+  color: #a8b9c8;
+  display: block;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+.bank-hero-stats strong {
+  display: block;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bank-hero .chart-hint {
+  margin-bottom: 0;
+}
+
+.bank-savings-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.bank-savings-label {
+  color: #a8b9c8;
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+
+.bank-savings-balance {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  margin: 0;
+}
+
+.bank-savings-row .chart-hint {
+  margin: 0;
+  max-width: 320px;
+  text-align: right;
+}
+
+.bank-transfer-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.transfer-card {
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.14);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.transfer-card label {
+  flex: none;
+}
+
+.transfer-card-title {
+  color: #eef6fb;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.transfer-in {
+  border-color: rgba(124, 240, 179, 0.3);
+}
+
+.transfer-out {
+  border-color: rgba(138, 180, 248, 0.3);
+}
+
+.transfer-in button {
+  background: #0e5664;
+}
+
+.transfer-out button {
+  background: rgba(190, 213, 230, 0.16);
+}
+
+.bankroll-transactions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bankroll-transactions li {
+  align-items: center;
+  border-bottom: 1px solid rgba(190, 213, 230, 0.1);
+  display: flex;
+  gap: 12px;
+  padding: 12px 4px;
+}
+
+.bankroll-transactions li:last-child {
+  border-bottom: none;
+}
+
+.bankroll-transactions li.txn-empty {
+  color: #7f93a4;
+}
+
+.txn-icon {
+  align-items: center;
+  background: rgba(190, 213, 230, 0.08);
+  border-radius: 50%;
+  display: flex;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.up .txn-icon {
+  background: rgba(124, 240, 179, 0.16);
+  color: #7cf0b3;
+}
+
+.down .txn-icon {
+  background: rgba(255, 155, 155, 0.16);
+  color: #ff9b9b;
+}
+
+.txn-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.txn-desc {
+  color: #eef6fb;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.txn-date {
+  color: #7f93a4;
+  font-size: 11.5px;
+}
+
+.txn-amount {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .bank-hero-balance {
+    font-size: 36px;
+  }
+
+  .bank-hero-stats,
+  .bank-transfer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bank-savings-row .chart-hint {
+    max-width: none;
+    text-align: left;
+  }
 }
 
 dl {

@@ -1055,17 +1055,23 @@ function renderBankroll(status) {
 
   const list = document.querySelector("#bankroll-transactions");
   if (!status.transactions.length) {
-    list.innerHTML = "<li>No transactions yet.</li>";
+    list.innerHTML = "<li class=\"txn-empty\">No transactions yet.</li>";
     return;
   }
   list.innerHTML = status.transactions
     .map((txn) => {
       const isWithdrawal = txn.kind === "withdrawal";
       const when = new Date(txn.created_at).toLocaleString();
+      const desc = isWithdrawal ? "Withdrawal to bankroll" : "Return to savings";
       const note = txn.note ? ` — ${escapeHtml(txn.note)}` : "";
-      return `<li class="${isWithdrawal ? "up" : "down"}">${isWithdrawal ? "+" : "-"}${formatUsd(txn.amount)} ${
-        isWithdrawal ? "Withdrew" : "Returned"
-      } · ${when}${note}</li>`;
+      return `<li class="${isWithdrawal ? "up" : "down"}">
+        <span class="txn-icon" aria-hidden="true">${isWithdrawal ? "&darr;" : "&uarr;"}</span>
+        <span class="txn-detail">
+          <span class="txn-desc">${desc}${note}</span>
+          <span class="txn-date">${when}</span>
+        </span>
+        <span class="txn-amount">${isWithdrawal ? "+" : "-"}${formatUsd(txn.amount)}</span>
+      </li>`;
     })
     .join("");
 }
