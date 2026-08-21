@@ -21,6 +21,22 @@
 
 set -euo pipefail
 
+SCRIPT_URL="https://raw.githubusercontent.com/hnic29/Rolling-Papers-Stock-Bot/main/deploy/proxmox-install.sh"
+
+# Self-elevate if not already root, instead of just failing - re-runs the
+# actual local file (preserving any edits you made) if invoked as one, or
+# re-fetches the canonical script if invoked via `bash -c "$(curl ...)"`
+# (where there's no local file to re-exec).
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || { echo "This needs root, and 'sudo' isn't installed - re-run as root manually." >&2; exit 1; }
+  echo "Not running as root - re-running with sudo..."
+  if [ -f "$0" ]; then
+    exec sudo -E bash "$0" "$@"
+  else
+    exec sudo -E bash -c "$(curl -fsSL "$SCRIPT_URL")"
+  fi
+fi
+
 APP_DIR="/opt/rolling-papers-bot"
 SERVICE="rolling-papers-bot"
 SERVICE_USER="rpbot"
@@ -63,10 +79,14 @@ if ! command -v pct >/dev/null 2>&1; then
     [ "$(id -u)" -eq 0 ] || die "Run this as root."
     msg_info "No 'pct' here and $APP_DIR already exists - updating the existing install instead of creating a new container."
 
+    apt-get update -qq
+    apt-get install -y -qq python3-dev build-essential ca-certificates >/dev/null
+
     BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
     git -C "$APP_DIR" pull --ff-only
     AFTER="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 
+    "$APP_DIR/.venv/bin/pip" install --no-cache-dir --quiet --upgrade pip setuptools wheel
     "$APP_DIR/.venv/bin/pip" install --no-cache-dir --quiet -r "$APP_DIR/requirements.txt"
     chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 
@@ -173,7 +193,7 @@ ENV_FILE="$CONF_DIR/rolling-papers-bot.env"
 SERVICE_USER="rpbot"
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv git sudo openssh-server >/dev/null
+apt-get install -y -qq python3 python3-venv python3-dev build-essential ca-certificates git sudo openssh-server >/dev/null
 
 # Admin login user (separate from the "rpbot" service account below, which
 # can't log in at all) - sudo-enabled so you don't need the root password
@@ -195,6 +215,7 @@ fi
 
 cd "$APP_DIR"
 python3 -m venv .venv
+.venv/bin/pip install --no-cache-dir --quiet --upgrade pip setuptools wheel
 .venv/bin/pip install --no-cache-dir --quiet -r requirements.txt
 
 mkdir -p "$STATE_DIR" "$CONF_DIR"

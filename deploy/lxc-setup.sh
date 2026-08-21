@@ -6,6 +6,11 @@
 # exists, and won't clobber your .env or existing trade log.
 set -euo pipefail
 
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || { echo "This needs root, and 'sudo' isn't installed - re-run as root manually." >&2; exit 1; }
+  exec sudo -E bash "$0" "$@"
+fi
+
 REPO_URL="https://github.com/hnic29/Rolling-Papers-Stock-Bot.git"
 APP_DIR="/opt/rolling-papers-bot"
 STATE_DIR="/var/lib/rolling-papers-bot"
@@ -14,7 +19,7 @@ ENV_FILE="$CONF_DIR/rolling-papers-bot.env"
 SERVICE_USER="rpbot"
 
 apt-get update
-apt-get install -y python3 python3-venv git
+apt-get install -y python3 python3-venv python3-dev build-essential ca-certificates git
 
 if ! id "$SERVICE_USER" &>/dev/null; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -28,6 +33,7 @@ fi
 
 cd "$APP_DIR"
 python3 -m venv .venv
+.venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
 .venv/bin/pip install --no-cache-dir -r requirements.txt
 
 mkdir -p "$STATE_DIR" "$CONF_DIR"
