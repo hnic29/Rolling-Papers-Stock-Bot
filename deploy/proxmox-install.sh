@@ -82,6 +82,12 @@ if ! command -v pct >/dev/null 2>&1; then
     apt-get update -qq
     apt-get install -y -qq python3-dev build-essential ca-certificates curl >/dev/null
 
+    # git refuses to touch a repo owned by a different user than the one
+    # running it (the "dubious ownership" safety check) - the app dir is
+    # owned by the rpbot service user, but we're root here, so without this
+    # `git pull` fails outright and nothing gets updated.
+    git config --global --add safe.directory "$APP_DIR"
+
     BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
     git -C "$APP_DIR" pull --ff-only
     AFTER="$(git -C "$APP_DIR" rev-parse --short HEAD)"
@@ -206,6 +212,11 @@ echo "$CT_USER:$CT_PASSWORD" | chpasswd
 systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd
 
 id "$SERVICE_USER" &>/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+
+# See the matching comment in the update-detection block above - a prior
+# run's chown to rpbot would otherwise make git refuse to touch this repo
+# as root on any re-run.
+git config --global --add safe.directory "$APP_DIR"
 
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" pull --quiet

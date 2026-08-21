@@ -25,6 +25,11 @@ if ! id "$SERVICE_USER" &>/dev/null; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
+# git refuses to touch a repo owned by a different user than the one running
+# it (the "dubious ownership" safety check) - a prior run's chown to rpbot
+# would otherwise make `git pull` fail on any re-run as root.
+git config --global --add safe.directory "$APP_DIR"
+
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" pull
 else

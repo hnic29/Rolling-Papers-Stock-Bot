@@ -31,6 +31,11 @@ apt-get update -qq
 apt-get install -y -qq python3-dev build-essential ca-certificates curl >/dev/null
 
 echo "Pulling latest code..."
+# git refuses to touch a repo owned by a different user than the one running
+# it (the "dubious ownership" safety check) - the app dir is owned by the
+# rpbot service user, but we're root here, so without this `git pull` fails
+# outright and nothing gets updated.
+git config --global --add safe.directory "$APP_DIR"
 BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 git -C "$APP_DIR" pull --ff-only
 AFTER="$(git -C "$APP_DIR" rev-parse --short HEAD)"
