@@ -13,8 +13,17 @@
 # (used for SSH login - not the same thing as the dashboard, which has no
 # login). Set CT_USER / CT_PASSWORD as environment variables beforehand to
 # skip the prompt (e.g. for unattended runs).
+#
+# The SAME command also works as an update: run it again later, but from
+# INSIDE the container (not the Proxmox host) - it detects there's no `pct`
+# available there, finds the existing install, and does a git pull + restart
+# instead of trying to create a new container.
 
 set -euo pipefail
+
+APP_DIR="/opt/rolling-papers-bot"
+SERVICE="rolling-papers-bot"
+SERVICE_USER="rpbot"
 
 # ---------------------------------------------------------------------------
 # Editable settings
@@ -46,10 +55,39 @@ echo " Rolling Papers Bot - Proxmox LXC installer"
 echo -e "${COLOR_RESET}"
 
 # ---------------------------------------------------------------------------
-# Sanity checks
+# Context detection: Proxmox host (create + install) vs. running inside an
+# already-set-up container (update). Same command, different behavior.
+# ---------------------------------------------------------------------------
+if ! command -v pct >/dev/null 2>&1; then
+  if [ -d "$APP_DIR/.git" ]; then
+    [ "$(id -u)" -eq 0 ] || die "Run this as root."
+    msg_info "No 'pct' here and $APP_DIR already exists - updating the existing install instead of creating a new container."
+
+    BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
+    git -C "$APP_DIR" pull --ff-only
+    AFTER="$(git -C "$APP_DIR" rev-parse --short HEAD)"
+
+    "$APP_DIR/.venv/bin/pip" install --no-cache-dir --quiet -r "$APP_DIR/requirements.txt"
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
+
+    systemctl restart "$SERVICE"
+    sleep 1
+    systemctl --no-pager --lines=0 status "$SERVICE"
+
+    if [ "$BEFORE" = "$AFTER" ]; then
+      msg_ok "Already up to date ($AFTER) - service restarted anyway."
+    else
+      msg_ok "Updated $BEFORE -> $AFTER and restarted."
+    fi
+    exit 0
+  fi
+  die "'pct' not found, and no existing install at $APP_DIR - this doesn't look like a Proxmox host or an already-set-up container."
+fi
+
+# ---------------------------------------------------------------------------
+# Sanity checks (Proxmox host path)
 # ---------------------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "Run this as root on the Proxmox host."
-command -v pct >/dev/null 2>&1 || die "'pct' not found - this doesn't look like a Proxmox VE host."
 
 # ---------------------------------------------------------------------------
 # Prompt for the container's admin user (SSH login - separate from the
@@ -201,5 +239,7 @@ echo "      DASHBOARD_USERNAME/DASHBOARD_PASSWORD in the env file above to lock 
 echo -e "        ${COLOR_GREEN}http://${IP:-<container-ip>}:8000${COLOR_RESET}"
 echo "   5. Logs:"
 echo "        sudo journalctl -u rolling-papers-bot -f"
-echo "   6. To update later, from inside the container:"
-echo "        bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/hnic29/Rolling-Papers-Stock-Bot/main/deploy/update.sh)\""
+echo "   6. To update later, run this SAME command again but from inside the"
+echo "      container (ssh in or 'pct enter $CT_ID' first) - it'll detect the"
+echo "      existing install and pull + restart instead of creating a new one:"
+echo "        bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/hnic29/Rolling-Papers-Stock-Bot/main/deploy/proxmox-install.sh)\""
