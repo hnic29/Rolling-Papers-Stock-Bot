@@ -40,6 +40,10 @@ ALPACA_PAPER=true
 FMP_API_KEY=
 ALLOW_LIVE_TRADING=false
 TRADE_LOG_PATH=/var/lib/rolling-papers-bot/trade_log.db
+# Optional: set both to put the dashboard behind HTTP Basic Auth. Left blank,
+# it's open to anyone who can reach the URL.
+DASHBOARD_USERNAME=
+DASHBOARD_PASSWORD=
 ENVEOF
   echo ">>> Wrote $ENV_FILE — fill in your API keys before starting the service."
 fi

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     max_daily_giveback_pct: float = 50.0
     max_consecutive_losses: int = 3
     max_minutes_without_trade: int = 60
+    dashboard_username: str = ""
+    dashboard_password: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

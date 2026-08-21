@@ -169,6 +169,10 @@ ALPACA_PAPER=true
 FMP_API_KEY=
 ALLOW_LIVE_TRADING=false
 TRADE_LOG_PATH=/var/lib/rolling-papers-bot/trade_log.db
+# Optional: set both to put the dashboard behind HTTP Basic Auth. Left blank,
+# it's open to anyone who can reach the URL.
+DASHBOARD_USERNAME=
+DASHBOARD_PASSWORD=
 ENVEOF
 fi
 chmod 600 "$ENV_FILE"
@@ -192,7 +196,8 @@ echo "   2. Add your real API keys (needs sudo):"
 echo "        sudo nano /etc/rolling-papers-bot/rolling-papers-bot.env"
 echo "   3. Restart the service to pick them up:"
 echo "        sudo systemctl restart rolling-papers-bot"
-echo "   4. Open the dashboard (no login required - it's wide open on your network):"
+echo "   4. Open the dashboard (open to your network by default - set"
+echo "      DASHBOARD_USERNAME/DASHBOARD_PASSWORD in the env file above to lock it down):"
 echo -e "        ${COLOR_GREEN}http://${IP:-<container-ip>}:8000${COLOR_RESET}"
 echo "   5. Logs:"
 echo "        sudo journalctl -u rolling-papers-bot -f"

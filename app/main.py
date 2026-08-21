@@ -24,6 +24,7 @@ from app.models import (
 from app.paths import resource_path
 from app.services import trade_log
 from app.services.backtest import run_backtest
+from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
 from app.services.env_file import mask_secret, read_env, write_env
 from app.services.fmp import FmpClient
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Rolling Papers Bot", version="0.1.0", lifespan=lifespan)
+app.add_middleware(BasicAuthMiddleware)
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 scanner = MarketScanner()
 MAX_BARS_LIMIT = 5000
