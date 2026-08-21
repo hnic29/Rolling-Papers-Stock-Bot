@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from alpaca.common.enums import Sort
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -76,6 +76,22 @@ def _enum_str(value) -> str:
     return str(value.value if hasattr(value, "value") else value)
 
 
+# Cache-busts /static/* references in index.html so a CDN/edge cache (e.g. a
+# Cloudflare Tunnel, which caches .css/.js by file extension regardless of
+# origin headers) can't keep serving a stale asset after a deploy — the query
+# string changes every process start, which every deploy path already forces
+# via `systemctl restart`.
+_STATIC_VERSION = str(int(datetime.now(UTC).timestamp()))
+_STATIC_HREF_PATTERN = re.compile(r'"(/static/[^"]+)"')
+
+
+def _render_index_html() -> str:
+    html = resource_path("static/index.html").read_text(encoding="utf-8")
+    return _STATIC_HREF_PATTERN.sub(lambda m: f'"{m.group(1)}?v={_STATIC_VERSION}"', html)
+
+
+_INDEX_HTML = _render_index_html()
+
 _API_KEY_LABEL_PREFIX = re.compile(r"(?i)^(api[_ -]?key|secret([_ -]?key)?)\s*[:=]\s*")
 
 
@@ -99,7 +115,7 @@ def resolve_period(period: str, now: datetime) -> tuple[TimeFrame, datetime]:
 
 @app.get("/")
 def index():
-    return FileResponse(resource_path("static/index.html"))
+    return HTMLResponse(_INDEX_HTML)
 
 
 @app.get("/api/status", response_model=BotStatus)
