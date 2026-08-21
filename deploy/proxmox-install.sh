@@ -2,14 +2,17 @@
 # Rolling Papers Bot - Proxmox VE LXC installer
 #
 # Run this ON THE PROXMOX HOST as root. It creates a Debian 12 LXC container,
-# installs the app inside it as a systemd service, and prints the URL + next
-# steps when done. Safe to review before running - nothing here reaches out
-# anywhere except your Proxmox storage/template mirror and GitHub for the app
-# repo itself.
+# installs the app inside it as a systemd service, sets up an admin user with
+# sudo + SSH access, and prints the URL + next steps when done. Safe to
+# review before running - nothing here reaches out anywhere except your
+# Proxmox storage/template mirror and GitHub for the app repo itself.
 #
 # Usage:
 #   bash proxmox-install.sh
-# or edit the variables below first if you want non-default sizing/network.
+# You'll be prompted for an admin username/password for the container
+# (used for SSH login - not the same thing as the dashboard, which has no
+# login). Set CT_USER / CT_PASSWORD as environment variables beforehand to
+# skip the prompt (e.g. for unattended runs).
 
 set -euo pipefail
 
@@ -26,6 +29,8 @@ CT_STORAGE="local-lvm"       # where the container's rootfs is created
 TEMPLATE_STORAGE="local"     # where LXC templates are cached
 REPO_URL="https://github.com/hnic29/Rolling-Papers-Stock-Bot.git"
 CT_ID="${CT_ID:-}"           # leave blank to auto-pick the next free ID
+CT_USER="${CT_USER:-}"       # leave blank to be prompted
+CT_PASSWORD="${CT_PASSWORD:-}"
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -45,6 +50,25 @@ echo -e "${COLOR_RESET}"
 # ---------------------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "Run this as root on the Proxmox host."
 command -v pct >/dev/null 2>&1 || die "'pct' not found - this doesn't look like a Proxmox VE host."
+
+# ---------------------------------------------------------------------------
+# Prompt for the container's admin user (SSH login - separate from the
+# dashboard, which has no auth of its own)
+# ---------------------------------------------------------------------------
+if [ -z "$CT_USER" ]; then
+  read -rp "Admin username to create inside the container: " CT_USER
+fi
+[ -n "$CT_USER" ] || die "Username can't be empty."
+
+if [ -z "$CT_PASSWORD" ]; then
+  while true; do
+    read -rsp "Password for $CT_USER: " CT_PASSWORD; echo
+    [ -n "$CT_PASSWORD" ] || { msg_error "Password can't be empty."; continue; }
+    read -rsp "Confirm password: " CT_PASSWORD_CONFIRM; echo
+    [ "$CT_PASSWORD" = "$CT_PASSWORD_CONFIRM" ] && break
+    msg_error "Passwords didn't match - try again."
+  done
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve container ID
@@ -83,8 +107,9 @@ pct create "$CT_ID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
   --unprivileged 1 \
   --features nesting=1 \
   --onboot 1 \
+  --password "$CT_PASSWORD" \
   >/dev/null
-msg_ok "Container created"
+msg_ok "Container created (root password set to what you entered too)"
 
 pct start "$CT_ID"
 msg_info "Waiting for network..."
@@ -97,10 +122,10 @@ done
 msg_ok "Container is up${IP:+ at $IP}"
 
 # ---------------------------------------------------------------------------
-# Install the app inside the container
+# Install the app + admin user + SSH inside the container
 # ---------------------------------------------------------------------------
-msg_info "Installing the app inside the container (Python venv + systemd service)..."
-pct exec "$CT_ID" -- bash -s -- "$REPO_URL" <<'CTEOF'
+msg_info "Installing the app, admin user, and SSH access inside the container..."
+pct exec "$CT_ID" -- env CT_USER="$CT_USER" CT_PASSWORD="$CT_PASSWORD" bash -s -- "$REPO_URL" <<'CTEOF'
 set -euo pipefail
 REPO_URL="$1"
 APP_DIR="/opt/rolling-papers-bot"
@@ -110,7 +135,17 @@ ENV_FILE="$CONF_DIR/rolling-papers-bot.env"
 SERVICE_USER="rpbot"
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv git >/dev/null
+apt-get install -y -qq python3 python3-venv git sudo openssh-server >/dev/null
+
+# Admin login user (separate from the "rpbot" service account below, which
+# can't log in at all) - sudo-enabled so you don't need the root password
+# day-to-day once you're in.
+if ! id "$CT_USER" &>/dev/null; then
+  useradd -m -s /bin/bash -G sudo "$CT_USER"
+fi
+echo "$CT_USER:$CT_PASSWORD" | chpasswd
+
+systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd
 
 id "$SERVICE_USER" &>/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 
@@ -143,7 +178,7 @@ cp "$APP_DIR/deploy/rolling-papers-bot.service" /etc/systemd/system/rolling-pape
 systemctl daemon-reload
 systemctl enable --now rolling-papers-bot
 CTEOF
-msg_ok "App installed and service started"
+msg_ok "App, admin user, and SSH are set up"
 
 # ---------------------------------------------------------------------------
 # Done
@@ -151,11 +186,15 @@ msg_ok "App installed and service started"
 echo
 msg_ok "Setup complete."
 echo -e " ${COLOR_YELLOW}Next steps:${COLOR_RESET}"
-echo "   1. Add your real API keys:"
-echo "        pct exec $CT_ID -- nano /etc/rolling-papers-bot/rolling-papers-bot.env"
-echo "   2. Restart the service to pick them up:"
-echo "        pct exec $CT_ID -- systemctl restart rolling-papers-bot"
-echo "   3. Open the dashboard:"
+echo "   1. SSH in (or use 'pct enter $CT_ID' from the Proxmox host):"
+echo -e "        ${COLOR_GREEN}ssh ${CT_USER}@${IP:-<container-ip>}${COLOR_RESET}"
+echo "   2. Add your real API keys (needs sudo):"
+echo "        sudo nano /etc/rolling-papers-bot/rolling-papers-bot.env"
+echo "   3. Restart the service to pick them up:"
+echo "        sudo systemctl restart rolling-papers-bot"
+echo "   4. Open the dashboard (no login required - it's wide open on your network):"
 echo -e "        ${COLOR_GREEN}http://${IP:-<container-ip>}:8000${COLOR_RESET}"
-echo "   4. Logs:"
-echo "        pct exec $CT_ID -- journalctl -u rolling-papers-bot -f"
+echo "   5. Logs:"
+echo "        sudo journalctl -u rolling-papers-bot -f"
+echo "   6. To update later, from inside the container:"
+echo "        bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/hnic29/Rolling-Papers-Stock-Bot/main/deploy/update.sh)\""
