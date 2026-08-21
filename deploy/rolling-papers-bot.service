@@ -15,6 +15,13 @@ WorkingDirectory=/opt/rolling-papers-bot
 # app which dotenv-style file to read/write itself - a save takes effect
 # immediately on the next request, no restart needed.
 Environment=CONFIG_ENV_PATH=/etc/rolling-papers-bot/rolling-papers-bot.env
+# app.services.trade_log reads this directly via os.environ (deliberately not
+# a Settings field - see app.config's comment on extra="ignore"), so it needs
+# its own explicit line here now that EnvironmentFile= is gone. Without it,
+# trade_log.py falls back to its relative default ("data/trade_log.db"),
+# which resolves under /opt/rolling-papers-bot - read-only under
+# ProtectSystem=strict, so every trade-log write fails outright.
+Environment=TRADE_LOG_PATH=/var/lib/rolling-papers-bot/trade_log.db
 ExecStart=/opt/rolling-papers-bot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
