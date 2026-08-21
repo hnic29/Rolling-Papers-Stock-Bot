@@ -30,8 +30,12 @@ class Settings(BaseSettings):
     automation_max_symbols: int = 150
     risk_per_trade: float = 200.0
     min_reward_risk_ratio: float = 2.0
-    trading_window_start: str = "07:00"
-    trading_window_end: str = "10:00"
+    # Auto-trading also gates on the broker's actual market-open flag, so 07:00-09:30 was
+    # always a no-op anyway - widened to the full regular session (9:30-16:00 ET) rather
+    # than just the first half hour after open, so a real signal can act on whenever it
+    # actually shows up instead of only in a 30-minute window each day.
+    trading_window_start: str = "09:30"
+    trading_window_end: str = "16:00"
     max_daily_giveback_pct: float = 50.0
     max_consecutive_losses: int = 3
     max_minutes_without_trade: int = 60
