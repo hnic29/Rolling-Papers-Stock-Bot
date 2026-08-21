@@ -260,6 +260,10 @@ class TradingBot:
             )
             return self.status
 
+        # scan_universe() itself only returns the top `limit` ranked results, not every
+        # symbol it actually looked at - track the real attempted count separately so the
+        # status message doesn't understate how much of the universe got covered.
+        scanned_count = len(self.scanner.load_universe()[: max(1, settings.automation_max_symbols)])
         try:
             scan_results = self.scanner.scan_universe(
                 limit=settings.automation_scan_limit,
@@ -323,7 +327,7 @@ class TradingBot:
         self.status.last_message = (
             "Auto-trading: " + "; ".join(parts)
             if parts
-            else f"Auto-trading scanned {len(scan_results)} symbols — no qualifying buy signals"
+            else f"Auto-trading scanned {scanned_count} symbols — no qualifying buy signals"
         )
         return self.status
 
