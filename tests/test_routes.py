@@ -307,3 +307,28 @@ def test_settings_post_strips_a_pasted_label_off_the_key(monkeypatch, tmp_path):
     saved = fake_env.read_text(encoding="utf-8")
     assert "FMP_API_KEY=TestKeyNotARealCredential123" in saved
     assert "apikey" not in saved.lower()
+
+
+def test_settings_post_rejects_a_newline_smuggled_config_injection(monkeypatch, tmp_path):
+    """A value like "key\\nALLOW_LIVE_TRADING=true" would otherwise land as
+    its own line in the config file on the next write, letting this endpoint
+    set arbitrary settings it was never meant to accept - including
+    ALLOW_LIVE_TRADING itself, or DASHBOARD_USERNAME/PASSWORD."""
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("EXISTING=untouched\n", encoding="utf-8")
+    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+
+    response = client.post(
+        "/api/settings",
+        json={
+            "alpaca_api_key": "fakekey123\nALLOW_LIVE_TRADING=true\nDASHBOARD_USERNAME=attacker",
+            "alpaca_secret_key": "",
+            "alpaca_paper": True,
+            "fmp_api_key": "",
+            "allow_live_trading": False,
+        },
+    )
+
+    assert response.status_code == 400
+    saved = fake_env.read_text(encoding="utf-8")
+    assert saved == "EXISTING=untouched\n"  # file untouched - no partial/injected write

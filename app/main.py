@@ -26,7 +26,7 @@ from app.services import trade_log
 from app.services.backtest import run_backtest
 from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
-from app.services.env_file import mask_secret, read_env, write_env
+from app.services.env_file import InvalidEnvValue, mask_secret, read_env, write_env
 from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 
@@ -127,7 +127,10 @@ def save_settings(request: AppSettingsUpdate):
     if request.fmp_api_key and "..." not in request.fmp_api_key:
         updates["FMP_API_KEY"] = _clean_api_key(request.fmp_api_key)
 
-    write_env(updates)
+    try:
+        write_env(updates)
+    except InvalidEnvValue as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     reload_settings()
     return get_settings()
 
