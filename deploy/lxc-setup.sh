@@ -19,7 +19,7 @@ ENV_FILE="$CONF_DIR/rolling-papers-bot.env"
 SERVICE_USER="rpbot"
 
 apt-get update
-apt-get install -y python3 python3-venv python3-dev build-essential ca-certificates git
+apt-get install -y python3 python3-venv python3-dev build-essential ca-certificates curl git
 
 if ! id "$SERVICE_USER" &>/dev/null; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"

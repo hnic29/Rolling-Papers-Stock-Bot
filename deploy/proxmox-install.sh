@@ -80,7 +80,7 @@ if ! command -v pct >/dev/null 2>&1; then
     msg_info "No 'pct' here and $APP_DIR already exists - updating the existing install instead of creating a new container."
 
     apt-get update -qq
-    apt-get install -y -qq python3-dev build-essential ca-certificates >/dev/null
+    apt-get install -y -qq python3-dev build-essential ca-certificates curl >/dev/null
 
     BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
     git -C "$APP_DIR" pull --ff-only
@@ -193,7 +193,7 @@ ENV_FILE="$CONF_DIR/rolling-papers-bot.env"
 SERVICE_USER="rpbot"
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-dev build-essential ca-certificates git sudo openssh-server >/dev/null
+apt-get install -y -qq python3 python3-venv python3-dev build-essential ca-certificates curl git sudo openssh-server >/dev/null
 
 # Admin login user (separate from the "rpbot" service account below, which
 # can't log in at all) - sudo-enabled so you don't need the root password

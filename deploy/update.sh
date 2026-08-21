@@ -28,7 +28,7 @@ fi
 
 echo "Refreshing system dependencies..."
 apt-get update -qq
-apt-get install -y -qq python3-dev build-essential ca-certificates >/dev/null
+apt-get install -y -qq python3-dev build-essential ca-certificates curl >/dev/null
 
 echo "Pulling latest code..."
 BEFORE="$(git -C "$APP_DIR" rev-parse --short HEAD)"
