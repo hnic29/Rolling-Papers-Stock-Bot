@@ -51,6 +51,15 @@ settings = Settings()
 
 
 def reload_settings() -> Settings:
-    global settings
-    settings = Settings()
+    """Re-reads the env file into the EXISTING `settings` object in place,
+    rather than constructing a new one and rebinding the module-level name.
+    Several other modules (alpaca_broker, fmp, bot, risk, ...) did
+    `from app.config import settings`, which binds their own reference to
+    the object's identity at import time - rebinding app.config's own name
+    would never reach them, so a saved API key would never actually take
+    effect anywhere except in this module itself. Mutating the shared
+    object's fields means every existing reference sees the update."""
+    fresh = Settings()
+    for field_name in Settings.model_fields:
+        setattr(settings, field_name, getattr(fresh, field_name))
     return settings
