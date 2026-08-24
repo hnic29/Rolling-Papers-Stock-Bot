@@ -725,6 +725,79 @@ def test_stopping_auto_trading_persists_across_a_restart_too(tmp_path, monkeypat
     assert second.status.auto_trading_enabled is False
 
 
+def test_a_submitted_buy_sends_a_notification(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+    sent = []
+    monkeypatch.setattr("app.services.bot.notify.send", lambda title, message, **kw: sent.append((title, message)))
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    fake_order = MagicMock()
+    fake_order.id = "order-n1"
+    fake_order.symbol = "ACHR"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.submit_trade(TradeRequest(symbol="ACHR", qty=10, side=Signal.buy, estimated_price=5.0, stop_loss_price=4.9))
+
+    assert len(sent) == 1
+    title, message = sent[0]
+    assert "ACHR" in title
+    assert "$5.00" in message and "stop $4.90" in message
+
+
+def test_a_sell_does_not_send_a_submission_notification(tmp_path, monkeypatch):
+    """Sells notify when the exit CONFIRMS with real P&L (trade_sync) - notifying the
+    submission too would double-ping every exit."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    sent = []
+    monkeypatch.setattr("app.services.bot.notify.send", lambda *a, **kw: sent.append(a))
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    fake_order = MagicMock()
+    fake_order.id = "order-n2"
+    fake_order.symbol = "ACHR"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.submit_trade(TradeRequest(symbol="ACHR", qty=10, side=Signal.sell))
+
+    assert sent == []
+
+
+def test_tripping_a_walk_away_sends_a_high_priority_notification(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    sent = []
+    monkeypatch.setattr(
+        "app.services.bot.notify.send",
+        lambda title, message, priority="default", **kw: sent.append((title, priority)),
+    )
+
+    bot = TradingBot()
+    now = datetime.now(UTC)
+    _record_realized_trade("n1", -20.0, now)
+    _record_realized_trade("n2", -15.0, now)
+    _record_realized_trade("n3", -10.0, now)
+
+    bot._update_session_state()
+    assert bot.status.walked_away_for_day is True
+    assert len(sent) == 1
+    assert sent[0] == ("Walked away for the day", "high")
+
+    bot._update_session_state()  # already tripped - must not re-notify every cycle
+    assert len(sent) == 1
+
+
 def test_refresh_status_reflects_a_runtime_paper_mode_change(tmp_path, monkeypatch):
     """Settings saves take effect without a restart, but status.paper was only set at
     construction - so after switching to live mode the dashboard's Mode field kept

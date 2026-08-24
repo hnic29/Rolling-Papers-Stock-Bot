@@ -27,7 +27,7 @@ from app.models import (
     TradeRequest,
 )
 from app.paths import resource_path
-from app.services import bankroll, trade_log, trade_sync
+from app.services import bankroll, notify, trade_log, trade_sync
 from app.services.backtest import run_backtest
 from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
@@ -151,6 +151,7 @@ def get_settings():
         # Never the password - write-only, only ever set via
         # update_dashboard_auth(), never echoed back once configured.
         dashboard_username=values.get("DASHBOARD_USERNAME", ""),
+        ntfy_topic=values.get("NTFY_TOPIC", ""),
     )
 
 
@@ -166,9 +167,11 @@ def save_settings(request: AppSettingsUpdate):
             ),
         )
 
+    previous_topic = settings.ntfy_topic
     updates = {
         "ALPACA_PAPER": str(request.alpaca_paper).lower(),
         "ALLOW_LIVE_TRADING": str(request.allow_live_trading).lower(),
+        "NTFY_TOPIC": request.ntfy_topic.strip(),
     }
     if request.alpaca_api_key and "..." not in request.alpaca_api_key:
         updates["ALPACA_API_KEY"] = _clean_api_key(request.alpaca_api_key)
@@ -182,6 +185,16 @@ def save_settings(request: AppSettingsUpdate):
     except InvalidEnvValue as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     reload_settings()
+
+    # Immediate feedback on the phone that the topic actually works - the alternative
+    # is discovering a typo'd topic days later by missing a real trade alert.
+    if settings.ntfy_topic and settings.ntfy_topic != previous_topic:
+        notify.send(
+            "Notifications connected",
+            "Rolling Papers Bot will push trade opens, exits with P&L, and walk-aways here.",
+            tags="white_check_mark",
+        )
+
     return get_settings()
 
 

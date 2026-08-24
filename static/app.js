@@ -257,6 +257,7 @@ async function loadSettings() {
     form.alpaca_api_key.value = settings.alpaca_api_key;
     form.alpaca_secret_key.value = settings.alpaca_secret_key;
     form.fmp_api_key.value = settings.fmp_api_key;
+    form.ntfy_topic.value = settings.ntfy_topic || "";
     form.alpaca_paper.checked = settings.alpaca_paper;
     form.allow_live_trading.checked = settings.allow_live_trading;
 
@@ -1430,6 +1431,7 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
         alpaca_api_key: form.alpaca_api_key.value,
         alpaca_secret_key: form.alpaca_secret_key.value,
         fmp_api_key: form.fmp_api_key.value,
+        ntfy_topic: form.ntfy_topic.value,
         alpaca_paper: form.alpaca_paper.checked,
         allow_live_trading: form.allow_live_trading.checked,
         confirm_live_trading: confirmLive,

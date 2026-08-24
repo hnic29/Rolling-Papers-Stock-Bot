@@ -71,6 +71,25 @@ def test_sync_leaves_a_pending_exit_alone_until_the_sell_fills():
     assert bankroll.deployed_capital() == 50.0  # still deployed until the exit confirms
 
 
+def test_sync_notifies_with_realized_pnl_when_an_exit_confirms(monkeypatch):
+    trade_log.record_trade(order_id="buy-1", symbol="ACHR", side="buy", qty=10, status="filled")
+    trade_log.update_fill(order_id="buy-1", status="filled", filled_avg_price=5.0, filled_qty=10, filled_at=datetime.now(UTC).isoformat())
+    trade_log.record_pending_exit("buy-1", "sell-1", "exit_signal")
+
+    sent = []
+    monkeypatch.setattr("app.services.trade_sync.notify.send", lambda title, message, **kw: sent.append((title, message)))
+
+    broker = MagicMock()
+    broker.get_order.return_value = _order(status="filled", filled_avg_price=5.5, filled_qty=10, order_id="sell-1")
+
+    trade_sync.sync_orders(broker)
+
+    assert len(sent) == 1
+    title, message = sent[0]
+    assert "+$5.00" in title and "ACHR" in title
+    assert "exit signal" in message
+
+
 def test_sync_survives_a_broker_error_on_one_order():
     trade_log.record_trade(order_id="buy-1", symbol="ACHR", side="buy", qty=10, status="accepted")
 

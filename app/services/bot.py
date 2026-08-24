@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import settings
 from app.models import BotStatus, Signal, TradeRequest
-from app.services import bankroll, bot_state, trade_log
+from app.services import bankroll, bot_state, notify, trade_log
 from app.services.live_setup import build_pullback_setup
 from app.services.risk import RiskManager
 from app.services.scanner import MarketScanner
@@ -234,6 +234,16 @@ class TradingBot:
                     self.status.walk_away_reason = f"no trade taken in over {settings.max_minutes_without_trade} minutes — momentum has cooled"
         finally:
             self._persist_state()
+            # Only reachable on the cycle that TRIPPED a walk-away (already-tripped days
+            # take the early return above), so this fires exactly once per trip.
+            if self.status.walked_away_for_day:
+                notify.send(
+                    "Walked away for the day",
+                    f"Auto-trading paused for new entries — {self.status.walk_away_reason}. "
+                    "Open positions stay protected; entries resume next trading day.",
+                    priority="high",
+                    tags="octagonal_sign",
+                )
 
     def _manage_open_positions(self, positions: list[dict]) -> list[str]:
         """This is what actually delivers "winners are held past the first target until
@@ -496,6 +506,19 @@ class TradingBot:
             take_profit_price=trade.take_profit_price,
             entry_price_estimate=trade.estimated_price if trade.side == Signal.buy else None,
         )
+
+        # Buys only - sells get their notification when the exit CONFIRMS with real
+        # P&L (trade_sync), which is the number that actually matters. Notifying the
+        # sell submission too would just double-ping every exit.
+        if trade.side == Signal.buy:
+            entry = f" @ ~${trade.estimated_price:,.2f}" if trade.estimated_price is not None else ""
+            stop = f", stop ${trade.stop_loss_price:,.2f}" if trade.stop_loss_price is not None else ", no stop attached"
+            notify.send(
+                f"Opened {trade.symbol.upper()}",
+                f"Bought {trade.qty:g} {trade.symbol.upper()}{entry}{stop}",
+                tags="chart_with_upwards_trend",
+            )
+
         return {"id": str(order.id), "status": str(order.status), "symbol": order.symbol}
 
 

@@ -10,11 +10,27 @@ the walk-away rules never saw a realized loss.
 """
 
 from app.brokers.alpaca_broker import AlpacaBroker
-from app.services import trade_log
+from app.services import notify, trade_log
+
+_EXIT_REASON_LABELS = {
+    "target": "hit its profit target",
+    "stop": "hit its stop loss",
+    "exit_signal": "closed on an exit signal",
+}
 
 
 def _enum_str(value) -> str:
     return str(value.value if hasattr(value, "value") else value)
+
+
+def _notify_exit(symbol: str, exit_reason: str, exit_price: float, exit_qty: float, realized_pnl: float) -> None:
+    sign = "+" if realized_pnl >= 0 else "-"
+    notify.send(
+        f"{'Won' if realized_pnl >= 0 else 'Lost'} {sign}${abs(realized_pnl):,.2f} on {symbol}",
+        f"{symbol} {_EXIT_REASON_LABELS.get(exit_reason, exit_reason)}: "
+        f"sold {exit_qty:g} @ ${exit_price:,.2f}, realized {sign}${abs(realized_pnl):,.2f}",
+        tags="moneybag" if realized_pnl >= 0 else "chart_with_downwards_trend",
+    )
 
 
 def sync_orders(broker: AlpacaBroker) -> None:
@@ -61,6 +77,7 @@ def sync_orders(broker: AlpacaBroker) -> None:
             exit_reason=exit_reason,
             realized_pnl=round(pnl, 2),
         )
+        _notify_exit(trade["symbol"], exit_reason, exit_price, exit_qty, round(pnl, 2))
 
     # Phase 3: standalone closing sells — position management submitted a market sell
     # and linked it via record_pending_exit; complete the exit once that sell fills.
@@ -86,3 +103,4 @@ def sync_orders(broker: AlpacaBroker) -> None:
             exit_reason=trade["exit_reason"] or "exit_signal",
             realized_pnl=round(pnl, 2),
         )
+        _notify_exit(trade["symbol"], trade["exit_reason"] or "exit_signal", exit_price, exit_qty, round(pnl, 2))

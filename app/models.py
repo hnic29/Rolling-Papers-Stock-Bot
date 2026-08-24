@@ -121,6 +121,7 @@ class AppSettingsResponse(BaseModel):
     fmp_api_key: str = ""
     allow_live_trading: bool = False
     dashboard_username: str = ""
+    ntfy_topic: str = ""
 
 
 class AppSettingsUpdate(BaseModel):
@@ -133,6 +134,7 @@ class AppSettingsUpdate(BaseModel):
     # allow_live_trading on) - deliberate server-side friction so neither two mis-clicked
     # checkboxes nor a bare API call can put real money in play silently.
     confirm_live_trading: bool = False
+    ntfy_topic: str = ""
 
 
 class DashboardAuthUpdate(BaseModel):

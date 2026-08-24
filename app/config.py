@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     max_minutes_without_trade: int = 60
     dashboard_username: str = ""
     dashboard_password: str = ""
+    # Push notifications (app.services.notify). Empty topic = disabled. The server
+    # default is the free public instance; point it at a self-hosted ntfy to go fully
+    # private - the rest of the code doesn't change.
+    ntfy_topic: str = ""
+    ntfy_server: str = "https://ntfy.sh"
 
     # extra="ignore": pydantic-settings' default is to reject any dotenv-file
     # key with no matching field. TRADE_LOG_PATH (read directly via os.environ
