@@ -5,15 +5,19 @@ import pytest
 
 from app.models import Candle, PullbackSetup, ScannerResponse, ScannerResult, Signal, StockCandidate, StrategyDecision, TradeRequest
 from app.services import bankroll, bot_state, trade_log
-from app.services.bot import TradingBot, current_trading_day
+from app.services.bot import STALE_UNIVERSE_DAYS, TradingBot, current_trading_day
 
 
 def _fund_bankroll(monkeypatch, amount=100_000.0):
     """These tests exercise other behavior (market-closed checks, order
     submission, walk-away timing) and aren't about the bankroll feature
     itself - give them a bankroll large enough to never be the constraint,
-    rather than every one of them needing its own withdrawal setup."""
+    rather than every one of them needing its own withdrawal setup. Patches
+    both functions since risk_per_trade_pct/max_position_value_pct sizing
+    reads current_bankroll(), while the hard availability gate reads
+    available_to_trade() - a real bankroll would have both agree."""
     monkeypatch.setattr(bankroll, "available_to_trade", lambda: amount)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda: amount)
 
 
 def _candidate(symbol, score=4):
@@ -344,9 +348,11 @@ def test_auto_cycle_places_no_trade_when_bankroll_is_empty(tmp_path, monkeypatch
 
 def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    # $5/share entry - $15 available covers only 3 shares, well under what
-    # the risk/capital settings alone would otherwise allow.
+    # $5/share entry - $15 *available* covers only 3 shares, well under what the
+    # risk/capital percentages alone would otherwise allow off a large overall bankroll
+    # (most of it just isn't available right now - e.g. tied up in other positions).
     monkeypatch.setattr(bankroll, "available_to_trade", lambda: 15.0)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda: 100_000.0)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -395,6 +401,51 @@ def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
         bot.auto_cycle()
 
     MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_auto_cycle_flags_a_stale_universe_in_its_status_message(monkeypatch, tmp_path):
+    """Nothing re-runs scripts/build_universe.py on its own - without a visible warning,
+    stale float/price/volume data would just keep getting used forever unnoticed."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+    monkeypatch.setattr(bot.scanner, "universe_age_days", lambda: STALE_UNIVERSE_DAYS + 10)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+    assert "universe data is" in bot.status.last_message
+    assert "build_universe.py" in bot.status.last_message
+
+
+def test_auto_cycle_does_not_flag_a_fresh_universe(monkeypatch, tmp_path):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+    monkeypatch.setattr(bot.scanner, "universe_age_days", lambda: 1)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+    assert "universe data is" not in bot.status.last_message
 
 
 def test_manage_open_positions_closes_on_a_red_candle_exit_signal(tmp_path, monkeypatch):
@@ -590,7 +641,7 @@ def test_stale_persisted_state_from_a_previous_day_resets_normally(tmp_path, mon
 
     stale_day = (current_trading_day() - timedelta(days=3)).isoformat()
     bot_state.save(
-        auto_trading_enabled=True, trading_day=stale_day, trades_today=4,
+        auto_trading_enabled=True, running=True, trading_day=stale_day, trades_today=4,
         peak_daily_pnl=99.0, consecutive_losses=3, walked_away_for_day=True,
         walk_away_reason="3 losing trades in a row", auto_trading_started_at=None,
     )
@@ -614,3 +665,16 @@ def test_stopping_auto_trading_persists_across_a_restart_too(tmp_path, monkeypat
     second = TradingBot()
 
     assert second.status.auto_trading_enabled is False
+
+
+def test_running_flag_also_survives_a_restart(tmp_path, monkeypatch):
+    """Cosmetic, not safety-critical (nothing gates on this flag), but the Start/Stop
+    button shouldn't lie about whether the bot is actually running after a restart."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    first = TradingBot()
+    first.start()
+
+    second = TradingBot()
+
+    assert second.status.running is True

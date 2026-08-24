@@ -17,10 +17,20 @@ class Settings(BaseSettings):
     alpaca_paper: bool = True
     bot_symbol: str = "AAPL"
     bot_qty: int = 1
-    max_daily_loss: float = 100.0
     max_trades_per_day: int = 5
-    max_position_value: float = 1000.0
     allow_live_trading: bool = False
+    # Percentages of the current bankroll (app.services.bankroll.current_bankroll()),
+    # not fixed dollar amounts - a static "$200 risk per trade" doesn't mean anything
+    # without knowing the account size it was picked against, and stops making sense the
+    # moment the bankroll changes (a withdrawal, a return-to-savings, or just P&L). 2%
+    # risk per trade / 20% max position value / 6% max daily loss are standard small-
+    # account guidelines, and 6% ~= three losses at 2% each - consistent with the
+    # existing "3 consecutive losses" walk-away rule instead of an arbitrary number that
+    # could be blown through by a single trade (the old $100 daily cap was smaller than
+    # the old $200 per-trade risk, so one loss alone could exceed the "daily" limit).
+    risk_per_trade_pct: float = 2.0
+    max_position_value_pct: float = 20.0
+    max_daily_loss_pct: float = 6.0
     fmp_api_key: str = ""
     automation_interval_seconds: int = 120
     automation_scan_limit: int = 10
@@ -28,7 +38,6 @@ class Settings(BaseSettings):
     # default to 30, silently scanning only the same alphabetical first slice of it every
     # cycle and never looking at the rest. 150 gives headroom above the current list size.
     automation_max_symbols: int = 150
-    risk_per_trade: float = 200.0
     min_reward_risk_ratio: float = 2.0
     # Auto-trading also gates on the broker's actual market-open flag, so 07:00-09:30 was
     # always a no-op anyway - widened to the full regular session (9:30-16:00 ET) rather

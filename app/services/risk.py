@@ -1,5 +1,6 @@
 from app.config import settings
 from app.models import TradeRequest
+from app.services import bankroll
 
 
 class RiskManager:
@@ -10,13 +11,25 @@ class RiskManager:
             raise ValueError("Quantity must be positive.")
         if trades_today >= settings.max_trades_per_day:
             raise ValueError("Max trades per day reached.")
-        if daily_pnl <= -abs(settings.max_daily_loss):
-            raise ValueError("Max daily loss reached.")
 
-        if trade.estimated_price is not None:
-            estimated_position_value = trade.qty * trade.estimated_price
-            if estimated_position_value > settings.max_position_value:
-                raise ValueError("Requested trade exceeds max position value setting.")
+        # Percentages of the current bankroll, not fixed dollars - see app.config's
+        # comment on why (a static dollar figure doesn't track the bankroll changing).
+        # Both checks are skipped entirely at a $0 bankroll: a 0% cap of nothing would
+        # otherwise reject at the exact boundary (e.g. $0.00 daily P&L against a $0.00
+        # cap) even when nothing has actually gone wrong, and a buy with no bankroll is
+        # already correctly rejected downstream (bot._validate_against_bankroll) with a
+        # much clearer message - this would just get there first with a worse one.
+        current_bankroll = bankroll.current_bankroll()
+        if current_bankroll > 0:
+            max_daily_loss = current_bankroll * settings.max_daily_loss_pct / 100
+            if daily_pnl <= -abs(max_daily_loss):
+                raise ValueError("Max daily loss reached.")
+
+            if trade.estimated_price is not None:
+                estimated_position_value = trade.qty * trade.estimated_price
+                max_position_value = current_bankroll * settings.max_position_value_pct / 100
+                if estimated_position_value > max_position_value:
+                    raise ValueError("Requested trade exceeds max position value setting.")
 
         if trade.stop_loss_price is not None or trade.take_profit_price is not None:
             if trade.qty != int(trade.qty):

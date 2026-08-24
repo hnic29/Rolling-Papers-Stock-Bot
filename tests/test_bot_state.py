@@ -12,6 +12,7 @@ def test_save_then_load_round_trips(tmp_path, monkeypatch):
 
     bot_state.save(
         auto_trading_enabled=True,
+        running=False,
         trading_day="2026-08-24",
         trades_today=2,
         peak_daily_pnl=15.5,
@@ -37,12 +38,12 @@ def test_save_overwrites_the_single_row_rather_than_appending(tmp_path, monkeypa
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
 
     bot_state.save(
-        auto_trading_enabled=False, trading_day="2026-08-24", trades_today=0,
+        auto_trading_enabled=False, running=False, trading_day="2026-08-24", trades_today=0,
         peak_daily_pnl=0.0, consecutive_losses=0, walked_away_for_day=False,
         walk_away_reason=None, auto_trading_started_at=None,
     )
     bot_state.save(
-        auto_trading_enabled=True, trading_day="2026-08-25", trades_today=5,
+        auto_trading_enabled=True, running=True, trading_day="2026-08-25", trades_today=5,
         peak_daily_pnl=42.0, consecutive_losses=3, walked_away_for_day=True,
         walk_away_reason="3 losing trades in a row", auto_trading_started_at=None,
     )

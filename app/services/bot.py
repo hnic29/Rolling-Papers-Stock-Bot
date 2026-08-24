@@ -11,6 +11,9 @@ from app.services.scanner import MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
+# Float/price/volume all drift; nothing re-runs scripts/build_universe.py on a schedule,
+# so this is what actually surfaces staleness instead of it going unnoticed indefinitely.
+STALE_UNIVERSE_DAYS = 45
 
 
 def current_trading_day() -> date:
@@ -51,6 +54,7 @@ class TradingBot:
         if not saved:
             return
         self.status.auto_trading_enabled = bool(saved["auto_trading_enabled"])
+        self.status.running = bool(saved["running"])
         self._trading_day = date.fromisoformat(saved["trading_day"])
         self.status.trades_today = saved["trades_today"]
         self.status.peak_daily_pnl = saved["peak_daily_pnl"]
@@ -65,6 +69,7 @@ class TradingBot:
         try:
             bot_state.save(
                 auto_trading_enabled=self.status.auto_trading_enabled,
+                running=self.status.running,
                 trading_day=self._trading_day.isoformat(),
                 trades_today=self.status.trades_today,
                 peak_daily_pnl=self.status.peak_daily_pnl,
@@ -89,9 +94,16 @@ class TradingBot:
             self._persist_state()
 
         try:
-            self.status.daily_pnl = AlpacaBroker().daily_pnl()
+            # Scoped to this bot's own trades (today's realized P&L from the trade log),
+            # not AlpacaBroker().daily_pnl() (the WHOLE account's equity change) - the
+            # daily-loss circuit breaker (RiskManager, checked against a percentage of
+            # the bankroll) needs to compare against P&L from the same bankroll-scoped
+            # world, not something that can swing on unrelated account activity. Also
+            # means this keeps working even when Alpaca itself is unreachable.
+            realized = trade_log.todays_realized_trades(self._trading_day)
+            self.status.daily_pnl = round(sum((trade["realized_pnl"] or 0.0) for trade in realized), 2)
         except Exception:
-            pass  # keep the last known value if Alpaca isn't reachable/configured
+            pass  # keep the last known value if the trade log isn't reachable for some reason
 
         return self.status
 
@@ -99,12 +111,14 @@ class TradingBot:
         self.refresh_status()
         self.status.running = True
         self.status.last_message = "Bot started"
+        self._persist_state()
         return self.status
 
     def stop(self) -> BotStatus:
         self.refresh_status()
         self.status.running = False
         self.status.last_message = "Bot stopped"
+        self._persist_state()
         return self.status
 
     def tick(self) -> BotStatus:
@@ -341,9 +355,15 @@ class TradingBot:
             if decision.signal != Signal.buy:
                 continue
 
+            # Percentages of the current bankroll, not fixed dollars - see app.config's
+            # comment on risk_per_trade_pct for why.
+            current_bankroll = bankroll.current_bankroll()
+            risk_dollars = current_bankroll * settings.risk_per_trade_pct / 100
+            position_value_dollars = current_bankroll * settings.max_position_value_pct / 100
+
             risk_per_share = setup.proposed_entry - setup.proposed_stop
-            qty_by_risk = int(settings.risk_per_trade // risk_per_share) if risk_per_share > 0 else 0
-            qty_by_capital = int(settings.max_position_value // setup.proposed_entry)
+            qty_by_risk = int(risk_dollars // risk_per_share) if risk_per_share > 0 else 0
+            qty_by_capital = int(position_value_dollars // setup.proposed_entry)
             qty_by_bankroll = self._qty_within_bankroll(setup.proposed_entry)
             size_candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
             qty = min(min(size_candidates) if size_candidates else qty_by_capital, qty_by_bankroll)
@@ -377,6 +397,15 @@ class TradingBot:
             if parts
             else f"Auto-trading scanned {scanned_count} symbols — no qualifying buy signals"
         )
+
+        # Nothing re-runs build_universe.py on its own - without this, stale float/price/
+        # volume data would just silently keep getting used forever with no one told.
+        universe_age = self.scanner.universe_age_days()
+        if universe_age is not None and universe_age >= STALE_UNIVERSE_DAYS:
+            self.status.last_message += (
+                f" (universe data is {universe_age} days old — consider re-running scripts/build_universe.py)"
+            )
+
         return self.status
 
     def manage_open_positions(self) -> BotStatus:

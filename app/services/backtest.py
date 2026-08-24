@@ -212,8 +212,12 @@ def run_backtest(
                 setup = _build_setup(candidate, bars_so_far)
                 decision = strategy.evaluate(setup)
                 if decision.signal == Signal.buy:
+                    # Percentage of the backtest's own running equity, not the live
+                    # bankroll - this simulation has its own starting_capital/position_value,
+                    # entirely separate from the real account.
+                    risk_dollars = equity * settings.risk_per_trade_pct / 100
                     risk_per_share = setup.proposed_entry - setup.proposed_stop
-                    qty_by_risk = int(settings.risk_per_trade // risk_per_share) if risk_per_share > 0 else 0
+                    qty_by_risk = int(risk_dollars // risk_per_share) if risk_per_share > 0 else 0
                     qty_by_capital = int(position_value // setup.proposed_entry)
                     qty = min(qty_by_risk, qty_by_capital) if qty_by_risk else qty_by_capital
                     if qty >= 1:

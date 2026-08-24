@@ -73,7 +73,7 @@ class SmallAccountPullbackStrategy:
         # High-of-day is only the *next visible level*, not a cap — winners are held past it
         # until an exit indicator fires (see exit_indicators). A shallow reward here isn't a
         # reason to skip the trade, just a note; the 2:1 target is enforced statistically via
-        # risk-based position sizing (settings.risk_per_trade), not a per-trade hard gate.
+        # risk-based position sizing (settings.risk_per_trade_pct), not a per-trade hard gate.
         reward_note = (
             f"reward to next high is only {round((target - setup.proposed_entry) / risk, 1)}:1 — expect to hold past it"
             if (target - setup.proposed_entry) < settings.min_reward_risk_ratio * risk

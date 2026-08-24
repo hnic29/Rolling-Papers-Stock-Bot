@@ -24,6 +24,12 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    # Lightweight migration for a bot_state table created before `running` existed -
+    # CREATE TABLE IF NOT EXISTS is a no-op against an already-existing table.
+    try:
+        conn.execute("ALTER TABLE bot_state ADD COLUMN running INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn
 
 
@@ -40,6 +46,7 @@ def load() -> dict | None:
 def save(
     *,
     auto_trading_enabled: bool,
+    running: bool,
     trading_day: str,
     trades_today: int,
     peak_daily_pnl: float,
@@ -53,11 +60,12 @@ def save(
         conn.execute(
             """
             INSERT INTO bot_state (
-                id, auto_trading_enabled, trading_day, trades_today, peak_daily_pnl,
+                id, auto_trading_enabled, running, trading_day, trades_today, peak_daily_pnl,
                 consecutive_losses, walked_away_for_day, walk_away_reason, auto_trading_started_at
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 auto_trading_enabled = excluded.auto_trading_enabled,
+                running = excluded.running,
                 trading_day = excluded.trading_day,
                 trades_today = excluded.trades_today,
                 peak_daily_pnl = excluded.peak_daily_pnl,
@@ -68,6 +76,7 @@ def save(
             """,
             (
                 int(auto_trading_enabled),
+                int(running),
                 trading_day,
                 trades_today,
                 peak_daily_pnl,
