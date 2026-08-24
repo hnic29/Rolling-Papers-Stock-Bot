@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -57,6 +57,55 @@ def test_relative_volume_is_prorated_by_time_of_day(monkeypatch):
 
     assert len(response.results) == 1
     assert abs(response.results[0].relative_volume - 1.0) < 0.01
+
+
+def test_relative_volume_average_uses_only_the_last_20_trading_days(monkeypatch):
+    """Regression: this used to average every bar the 80-calendar-day fetch happened to
+    return (~56 trading days), silently diverging from the documented and backtest-
+    matching 20-day convention. 40 prior days at very different volumes - if the whole
+    fetch were still being averaged, the result would be far from what a clean 20-day
+    window gives."""
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
+    # 20 older days at 3,000,000 (would drag the average way up if included) followed
+    # by 20 recent days at 1,000,000 (the window this SHOULD use), then today.
+    bars = {
+        "ACHR": [_bar(10.0, 3_000_000) for _ in range(20)]
+        + [_bar(10.0, 1_000_000) for _ in range(20)]
+        + [_bar(10.5, 5_000_000)]
+    }
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
+        response = scanner.scan(["ACHR"])
+
+    # 5,000,000 / 1,000,000 = 5.0 if only the last 20 days count; including the older,
+    # higher-volume days would pull relative_volume down well under that.
+    assert abs(response.results[0].relative_volume - 5.0) < 0.01
+
+
+def test_scan_queries_past_the_sip_recency_restriction(monkeypatch):
+    """Alpaca's free tier rejects a SIP query newer than ~15 minutes (verified live).
+    scan() must query a window ending far enough in the past to actually get data back,
+    not literal now()."""
+    from app.services import scanner as scanner_module
+
+    captured = {}
+
+    def capturing_daily_bars(symbols, start, end):
+        captured["end"] = end
+        return SimpleNamespace(data={})
+
+    broker = MagicMock()
+    broker.daily_bars.side_effect = capturing_daily_bars
+    broker.latest_news.side_effect = Exception("no news in test")
+
+    before_call = datetime.now(UTC)
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        scanner.scan(["ACHR"])
+
+    lag = before_call - captured["end"]
+    assert lag >= timedelta(minutes=scanner_module.SIP_RECENCY_BUFFER_MINUTES)
 
 
 def test_fmp_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(monkeypatch):

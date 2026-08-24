@@ -149,13 +149,19 @@ class AlpacaBroker:
             "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
         }
 
-    def daily_bars(self, symbols: list[str], start: datetime, end: datetime):
+    def daily_bars(self, symbols: list[str], start: datetime, end: datetime, feed: DataFeed = DataFeed.SIP):
+        """Defaults to SIP (consolidated, all exchanges), not IEX - verified live that IEX
+        alone captures only ~2-3% of real volume for a liquid name (631K vs 19.8M shares on
+        the same AAPL session), which silently wrecks both volume-based scoring pillars
+        (total volume, relative volume). Every current caller uses this for that scoring,
+        where SIP's ~15-minute delay on the free tier is a non-issue - callers needing
+        genuinely real-time intraday data use historical_bars (IEX) instead."""
         request = StockBarsRequest(
             symbol_or_symbols=[symbol.upper() for symbol in symbols],
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
-            feed=DataFeed.IEX,
+            feed=feed,
         )
         return self.data_client.get_stock_bars(request)
 

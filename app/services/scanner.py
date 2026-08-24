@@ -14,6 +14,12 @@ MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN = dtime(9, 30)
 MARKET_CLOSE = dtime(16, 0)
 TRADING_SESSION_MINUTES = 390  # 9:30-16:00 ET
+AVG_VOLUME_WINDOW = 20  # trading days used as the relative-volume baseline
+# Alpaca's free tier rejects a SIP (consolidated) query any newer than ~15 minutes -
+# verified directly (14 worked, 5 and 0 minutes back did not). Daily-bar-based scoring
+# doesn't need to-the-second freshness, so trading that lag away for true consolidated
+# volume (see AlpacaBroker.daily_bars) is a clear win, not a compromise.
+SIP_RECENCY_BUFFER_MINUTES = 16
 
 _UNIVERSE_BUILD_DATE_PATTERN = re.compile(r"Built by scripts/build_universe\.py on (\d{4}-\d{2}-\d{2})")
 
@@ -46,7 +52,11 @@ class MarketScanner:
             return ScannerResponse(results=[])
 
         broker = AlpacaBroker()
-        end = datetime.now(UTC)
+        # Offset past Alpaca's free-tier SIP recency restriction (see
+        # SIP_RECENCY_BUFFER_MINUTES) - session_progress is computed against this SAME
+        # timestamp, not literal now(), so the proration matches what the data actually
+        # reflects: volume accumulated as of `end`, not as of this instant.
+        end = datetime.now(UTC) - timedelta(minutes=SIP_RECENCY_BUFFER_MINUTES)
         start = end - timedelta(days=80)
         bars = broker.daily_bars(clean_symbols, start=start, end=end)
         metadata = self.load_metadata()
@@ -64,7 +74,12 @@ class MarketScanner:
             price = float(latest.close)
             previous_close = float(previous.close)
             percent_change = ((price - previous_close) / previous_close) * 100 if previous_close else 0.0
-            full_day_avg_volume = sum(int(bar.volume or 0) for bar in symbol_bars[:-1]) / max(len(symbol_bars) - 1, 1)
+            # Last AVG_VOLUME_WINDOW trading days only, not every day this request
+            # happened to fetch - otherwise this drifts with the fetch window's size
+            # (80 calendar days is ~56 trading days) instead of the intended 20-day
+            # baseline, silently diverging from the backtest's own 20-day convention.
+            prior_bars = symbol_bars[:-1][-AVG_VOLUME_WINDOW:]
+            full_day_avg_volume = sum(int(bar.volume or 0) for bar in prior_bars) / max(len(prior_bars), 1)
             avg_volume = full_day_avg_volume * session_progress
             total_volume = int(latest.volume or 0)
             relative_volume = total_volume / avg_volume if avg_volume else None

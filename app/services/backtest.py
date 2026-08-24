@@ -8,11 +8,10 @@ from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StockCandidate
 from app.services.fmp import FmpClient
 from app.services.live_setup import compute_ema, compute_macd, compute_vwap
-from app.services.scanner import MarketScanner
+from app.services.scanner import AVG_VOLUME_WINDOW, MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
-AVG_VOLUME_WINDOW = 20  # trading days used as the relative-volume baseline, same convention as the live scanner
 MAX_BACKTEST_SYMBOLS = 100  # guards a user-supplied symbol list; the real universe is far smaller
 
 
