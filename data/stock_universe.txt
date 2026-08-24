@@ -1,28 +1,18 @@
-# Built by scripts/build_universe.py - live-screened for price $2-$20, avg volume >= 50,000/day, and float <= 30,000,000 shares.
-AMPG
-ARCT
-BBNX
-BOBS
+# Built by scripts/build_universe.py - live-screened for price $2-$20, avg volume >= 50,000/day, and float <= 20,000,000 shares.
 BRUN
 BYND
 CISS
 DQ
-DUOT
 ELPW
 EROC
 FRNM
-FUBO
 GRPN
 KIDZ
 LBGJ
 MPLT
-NRDS
 RCON
 RLMD
 SECZ
 SION
 SMTK
 SXTC
-TASK
-UNCY
-XPOF

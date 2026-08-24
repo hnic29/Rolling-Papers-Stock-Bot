@@ -37,9 +37,12 @@ from app.services.scanner import MarketScanner
 
 
 async def _automation_loop() -> None:
-    """Runs for the life of the server; each pass is a no-op unless auto-trading is on."""
+    """Runs for the life of the server. manage_open_positions() always runs - a position
+    doesn't stop needing protection just because new-entry auto-trading is switched off -
+    while auto_cycle() (new entries) is a no-op unless auto-trading is on."""
     while True:
         try:
+            await asyncio.to_thread(bot.manage_open_positions)
             if bot.status.auto_trading_enabled:
                 await asyncio.to_thread(bot.auto_cycle)
         except Exception:

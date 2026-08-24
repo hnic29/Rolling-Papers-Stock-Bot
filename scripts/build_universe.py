@@ -28,22 +28,23 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))  # so `app.*` resolves regardless of how this script is invoked
 
 from app.brokers.alpaca_broker import AlpacaBroker  # noqa: E402
+from app.strategies.small_account_pullback import SmallAccountPullbackStrategy  # noqa: E402
 
 UNIVERSE_PATH = ROOT / "data" / "stock_universe.txt"
 METADATA_PATH = ROOT / "data" / "symbol_metadata.csv"
 
-MIN_PRICE = 2.0
-MAX_PRICE = 20.0
+MIN_PRICE = SmallAccountPullbackStrategy.preferred_min_price
+MAX_PRICE = SmallAccountPullbackStrategy.preferred_max_price
 # NOT the strategy's real min_total_volume (1M) - a genuine low-float runner is usually
 # quiet most days and only spikes to millions of shares on the day it actually moves, so
 # requiring a sustained 30-day *average* of 1M would select for the opposite profile
 # (steadily-liquid, usually higher-float names). This floor only exists to exclude
 # truly dead/halted tickers; the live scanner already checks TODAY's volume for real.
 MIN_AVG_VOLUME = 50_000
-# A little headroom over the strategy's 20M float gate - a live scan's own float check
-# (now backed by this same metadata CSV) is still the final word on any given day; this
-# screen just needs to build a plausible candidate pool, not make the final call.
-MAX_FLOAT = 30_000_000
+# The strategy's exact float gate, not a looser approximation of it - headroom here just
+# produces symbols that pass this screen but can never actually clear score_candidate's
+# real check, the same structural mismatch that made the old hand-picked list useless.
+MAX_FLOAT = SmallAccountPullbackStrategy.max_float
 CHUNK_SIZE = 300
 
 

@@ -207,11 +207,17 @@ class TradingBot:
         return self.status
 
     def auto_cycle(self) -> BotStatus:
-        """One automation pass: manage existing positions first (close anything tripping
-        an exit indicator - see _manage_open_positions), then scan the universe and submit
-        bracket trades for genuine new buy signals. Reuses submit_trade() so every existing
-        risk guard (daily loss, trade cap, position cap, paper/live gating) applies exactly
-        as it does to a manually submitted order."""
+        """One automation pass: scans the universe and submits bracket trades for genuine
+        new buy signals. Reuses submit_trade() so every existing risk guard (daily loss,
+        trade cap, position cap, paper/live gating) applies exactly as it does to a
+        manually submitted order.
+
+        Deliberately does NOT manage existing positions - see manage_open_positions(),
+        which app.main's automation loop calls every cycle regardless of this method's
+        own auto_trading_enabled gate. Watching risk that's already open should never
+        depend on whether new-entry auto-trading happens to be switched on; a position
+        opened manually with no stop-loss attached would otherwise go completely
+        unwatched the moment this toggle is off."""
         self.refresh_status()
         if not self.status.auto_trading_enabled:
             return self.status
@@ -233,30 +239,24 @@ class TradingBot:
             return self.status
 
         try:
-            held_positions = broker.positions_as_dicts()
+            held_symbols = {position["symbol"] for position in broker.positions_as_dicts()}
         except Exception:
-            held_positions = []
-        held_symbols = {position["symbol"] for position in held_positions}
-
-        exited = self._manage_open_positions(held_positions)
+            held_symbols = set()
 
         self._update_session_state()
         if self.status.walked_away_for_day:
-            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
-            self.status.last_message = f"Auto-trading paused for new entries — {self.status.walk_away_reason}{suffix}"
+            self.status.last_message = f"Auto-trading paused for new entries — {self.status.walk_away_reason}"
             return self.status
 
         if not self._within_trading_window(datetime.now(UTC)):
-            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
             self.status.last_message = (
-                f"Auto-trading idle — outside the {settings.trading_window_start}-{settings.trading_window_end} trading window{suffix}"
+                f"Auto-trading idle — outside the {settings.trading_window_start}-{settings.trading_window_end} trading window"
             )
             return self.status
 
         if bankroll.available_to_trade() <= 0:
-            suffix = f" (closed {', '.join(exited)} on an exit signal)" if exited else ""
             self.status.last_message = (
-                f"Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading.{suffix}"
+                "Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading."
             )
             return self.status
 
@@ -318,8 +318,6 @@ class TradingBot:
                 continue
 
         parts = []
-        if exited:
-            parts.append(f"closed {', '.join(exited)} on an exit signal")
         if traded:
             parts.append(f"opened {', '.join(traded)}")
         if skipped:
@@ -329,6 +327,34 @@ class TradingBot:
             if parts
             else f"Auto-trading scanned {scanned_count} symbols — no qualifying buy signals"
         )
+        return self.status
+
+    def manage_open_positions(self) -> BotStatus:
+        """Watches every currently-held position for a real exit signal and closes it if
+        one fires - runs every automation cycle regardless of whether new-entry
+        auto-trading is switched on (see app.main's automation loop). This is the only
+        thing protecting a position that doesn't have its own broker-side stop-loss, e.g.
+        a manual order placed without one - it has no other safety net."""
+        self.refresh_status()
+        try:
+            broker = AlpacaBroker()
+            clock = broker.client.get_clock()
+        except BrokerUnavailable:
+            return self.status
+        except Exception:
+            return self.status
+
+        if not clock.is_open:
+            return self.status
+
+        try:
+            held_positions = broker.positions_as_dicts()
+        except Exception:
+            held_positions = []
+
+        exited = self._manage_open_positions(held_positions)
+        if exited:
+            self.status.last_message = f"Closed {', '.join(exited)} on an exit signal"
         return self.status
 
     def submit_trade(self, trade: TradeRequest) -> dict:

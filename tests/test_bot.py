@@ -434,17 +434,16 @@ def test_manage_open_positions_leaves_a_quiet_position_open(tmp_path, monkeypatc
     MockBroker.return_value.submit_market_order.assert_not_called()
 
 
-def test_auto_cycle_closes_a_position_even_when_bankroll_is_empty(tmp_path, monkeypatch):
-    """The bug this fixes: an empty available-to-trade balance (e.g. fully deployed
-    into open positions) used to short-circuit auto_cycle before it ever looked at
-    those positions - exactly the moment managing them matters most."""
+def test_manage_open_positions_works_even_when_bankroll_is_empty(tmp_path, monkeypatch):
+    """An empty available-to-trade balance (e.g. fully deployed into open positions)
+    should never stop a position from being watched for a real exit - that's exactly
+    the moment managing it matters most. manage_open_positions() doesn't even look at
+    bankroll, unlike auto_cycle() (new entries), which correctly does."""
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
 
     bot = TradingBot()
-    bot.status.auto_trading_enabled = True
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
@@ -458,20 +457,18 @@ def test_auto_cycle_closes_a_position_even_when_bankroll_is_empty(tmp_path, monk
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
-        bot.auto_cycle()
+        bot.manage_open_positions()
 
         args, _ = MockBroker.return_value.submit_market_order.call_args
         assert args == ("ACHR", 10, "sell")
 
-    assert "no bankroll available" in bot.status.last_message.lower()
-    assert "closed ACHR" in bot.status.last_message
+    assert "Closed ACHR" in bot.status.last_message
 
 
-def test_auto_cycle_closes_a_position_even_when_walked_away_for_the_day(tmp_path, monkeypatch):
+def test_manage_open_positions_works_even_when_walked_away_for_the_day(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
 
     bot = TradingBot()
-    bot.status.auto_trading_enabled = True
     bot.status.daily_pnl = 0.0
     bot.status.walked_away_for_day = True
     bot.status.walk_away_reason = "3 losing trades in a row"
@@ -488,10 +485,65 @@ def test_auto_cycle_closes_a_position_even_when_walked_away_for_the_day(tmp_path
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
-        bot.auto_cycle()
+        bot.manage_open_positions()
 
         args, _ = MockBroker.return_value.submit_market_order.call_args
         assert args == ("ACHR", 10, "sell")
 
-    assert "3 losing trades in a row" in bot.status.last_message
-    assert "closed ACHR" in bot.status.last_message
+    assert "Closed ACHR" in bot.status.last_message
+
+
+def test_manage_open_positions_works_even_when_auto_trading_is_disabled(tmp_path, monkeypatch):
+    """The actual gap this fixes: a position opened manually (with no broker-side
+    stop-loss) used to go completely unwatched whenever auto-trading was toggled off,
+    since exit-checking only ever ran inside auto_cycle(), which is a no-op when the
+    toggle is off. manage_open_positions() must protect open risk regardless of that
+    toggle - app.main's automation loop now calls it unconditionally every cycle."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = False
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+
+    fake_order = MagicMock()
+    fake_order.id = "exit-order-4"
+    fake_order.symbol = "SMTK"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "SMTK", "qty": 1}]
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.manage_open_positions()
+
+        args, _ = MockBroker.return_value.submit_market_order.call_args
+        assert args == ("SMTK", 1, "sell")
+
+    assert "Closed SMTK" in bot.status.last_message
+
+
+def test_auto_cycle_no_longer_manages_positions_itself(tmp_path, monkeypatch):
+    """Position management moved to manage_open_positions() (called independently every
+    automation cycle) - auto_cycle() should never touch an existing position anymore,
+    even one that would obviously trip an exit signal."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 10}]
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+    MockBroker.return_value.submit_market_order.assert_not_called()
