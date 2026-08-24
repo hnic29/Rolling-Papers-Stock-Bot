@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import settings
 from app.models import BotStatus, Signal, TradeRequest
-from app.services import bankroll, trade_log
+from app.services import bankroll, bot_state, trade_log
 from app.services.live_setup import build_pullback_setup
 from app.services.risk import RiskManager
 from app.services.scanner import MarketScanner
@@ -34,6 +34,47 @@ class TradingBot:
         self.scanner = MarketScanner()
         self._trading_day = current_trading_day()
         self._auto_trading_started_at: datetime | None = None
+        self._restore_persisted_state()
+
+    def _restore_persisted_state(self) -> None:
+        """Every deploy restarts this process, which used to silently drop
+        auto_trading_enabled back to off (and the day's risk counters back to zero) with
+        no signal to anyone - discovered the hard way when a position sat unwatched for
+        hours after a routine restart. Stale state from a *previous* trading day is
+        harmless to restore here: refresh_status()'s existing day-rollover check resets
+        it correctly on the very next call, the same way it already handles a rollover
+        that happens mid-session."""
+        try:
+            saved = bot_state.load()
+        except Exception:
+            saved = None
+        if not saved:
+            return
+        self.status.auto_trading_enabled = bool(saved["auto_trading_enabled"])
+        self._trading_day = date.fromisoformat(saved["trading_day"])
+        self.status.trades_today = saved["trades_today"]
+        self.status.peak_daily_pnl = saved["peak_daily_pnl"]
+        self.status.consecutive_losses = saved["consecutive_losses"]
+        self.status.walked_away_for_day = bool(saved["walked_away_for_day"])
+        self.status.walk_away_reason = saved["walk_away_reason"]
+        self._auto_trading_started_at = (
+            datetime.fromisoformat(saved["auto_trading_started_at"]) if saved["auto_trading_started_at"] else None
+        )
+
+    def _persist_state(self) -> None:
+        try:
+            bot_state.save(
+                auto_trading_enabled=self.status.auto_trading_enabled,
+                trading_day=self._trading_day.isoformat(),
+                trades_today=self.status.trades_today,
+                peak_daily_pnl=self.status.peak_daily_pnl,
+                consecutive_losses=self.status.consecutive_losses,
+                walked_away_for_day=self.status.walked_away_for_day,
+                walk_away_reason=self.status.walk_away_reason,
+                auto_trading_started_at=self._auto_trading_started_at.isoformat() if self._auto_trading_started_at else None,
+            )
+        except Exception:
+            pass  # persistence is a nice-to-have across restarts, never worth crashing a live cycle over
 
     def refresh_status(self) -> BotStatus:
         today = current_trading_day()
@@ -45,6 +86,7 @@ class TradingBot:
             self.status.walked_away_for_day = False
             self.status.walk_away_reason = None
             self._auto_trading_started_at = datetime.now(UTC) if self.status.auto_trading_enabled else None
+            self._persist_state()
 
         try:
             self.status.daily_pnl = AlpacaBroker().daily_pnl()
@@ -128,44 +170,50 @@ class TradingBot:
         trading day rolls over in refresh_status() — coming back after walking away is
         exactly the FOMO trap those rules exist to prevent."""
         if self.status.walked_away_for_day:
-            return
+            return  # already persisted whenever it was first set - nothing changed here
 
-        realized = trade_log.todays_realized_trades(self._trading_day)
-        running_pnl = 0.0
-        peak = 0.0
-        streak = 0
-        for trade in realized:
-            pnl = trade["realized_pnl"] or 0.0
-            running_pnl += pnl
-            peak = max(peak, running_pnl)
-            streak = streak + 1 if pnl < 0 else 0
+        # try/finally rather than a persist call before each return below - guarantees
+        # whatever this method decided gets saved no matter which branch exits it,
+        # instead of depending on every future edit remembering to add one too.
+        try:
+            realized = trade_log.todays_realized_trades(self._trading_day)
+            running_pnl = 0.0
+            peak = 0.0
+            streak = 0
+            for trade in realized:
+                pnl = trade["realized_pnl"] or 0.0
+                running_pnl += pnl
+                peak = max(peak, running_pnl)
+                streak = streak + 1 if pnl < 0 else 0
 
-        self.status.peak_daily_pnl = round(peak, 2)
-        self.status.consecutive_losses = streak
+            self.status.peak_daily_pnl = round(peak, 2)
+            self.status.consecutive_losses = streak
 
-        if streak >= settings.max_consecutive_losses:
-            self.status.walked_away_for_day = True
-            self.status.walk_away_reason = f"{streak} losing trades in a row"
-            return
-
-        if peak > 0 and running_pnl <= peak * (1 - settings.max_daily_giveback_pct / 100):
-            self.status.walked_away_for_day = True
-            self.status.walk_away_reason = f"gave back more than {settings.max_daily_giveback_pct:.0f}% of today's peak profit"
-            return
-
-        submitted = trade_log.todays_submitted_trades(self._trading_day)
-        if submitted:
-            baseline = datetime.fromisoformat(submitted[-1]["submitted_at"])
-            if baseline.tzinfo is None:
-                baseline = baseline.replace(tzinfo=UTC)
-        else:
-            baseline = self._auto_trading_started_at
-
-        if baseline is not None:
-            idle_minutes = (datetime.now(UTC) - baseline).total_seconds() / 60
-            if idle_minutes > settings.max_minutes_without_trade:
+            if streak >= settings.max_consecutive_losses:
                 self.status.walked_away_for_day = True
-                self.status.walk_away_reason = f"no trade taken in over {settings.max_minutes_without_trade} minutes — momentum has cooled"
+                self.status.walk_away_reason = f"{streak} losing trades in a row"
+                return
+
+            if peak > 0 and running_pnl <= peak * (1 - settings.max_daily_giveback_pct / 100):
+                self.status.walked_away_for_day = True
+                self.status.walk_away_reason = f"gave back more than {settings.max_daily_giveback_pct:.0f}% of today's peak profit"
+                return
+
+            submitted = trade_log.todays_submitted_trades(self._trading_day)
+            if submitted:
+                baseline = datetime.fromisoformat(submitted[-1]["submitted_at"])
+                if baseline.tzinfo is None:
+                    baseline = baseline.replace(tzinfo=UTC)
+            else:
+                baseline = self._auto_trading_started_at
+
+            if baseline is not None:
+                idle_minutes = (datetime.now(UTC) - baseline).total_seconds() / 60
+                if idle_minutes > settings.max_minutes_without_trade:
+                    self.status.walked_away_for_day = True
+                    self.status.walk_away_reason = f"no trade taken in over {settings.max_minutes_without_trade} minutes — momentum has cooled"
+        finally:
+            self._persist_state()
 
     def _manage_open_positions(self, positions: list[dict]) -> list[str]:
         """This is what actually delivers "winners are held past the first target until
@@ -174,8 +222,8 @@ class TradingBot:
         nothing caps a winner automatically. Every cycle, each held position gets re-checked
         against the same exit_indicators() a fresh evaluation would use — level-two selling
         pressure, a topping-tail candle, a red candle — and gets closed the moment one fires.
-        Runs before the walk-away/trading-window/bankroll gates in auto_cycle, since managing
-        risk that's already open is never something those should block."""
+        Called from manage_open_positions(), independent of auto_cycle()'s new-entry gates -
+        managing risk that's already open should never depend on those."""
         exited: list[str] = []
         for position in positions:
             symbol = position.get("symbol")
@@ -197,6 +245,7 @@ class TradingBot:
         self.status.auto_trading_enabled = True
         self._auto_trading_started_at = datetime.now(UTC)
         self.status.last_message = "Auto-trading enabled — will scan and trade automatically while the market is open"
+        self._persist_state()
         return self.status
 
     def stop_auto_trading(self) -> BotStatus:
@@ -204,6 +253,7 @@ class TradingBot:
         self.status.auto_trading_enabled = False
         self._auto_trading_started_at = None
         self.status.last_message = "Auto-trading disabled"
+        self._persist_state()
         return self.status
 
     def auto_cycle(self) -> BotStatus:
@@ -377,6 +427,7 @@ class TradingBot:
         self.status.trades_today += 1
         self.status.last_signal = trade.side
         self.status.last_message = f"Submitted {trade.side.value} order for {trade.qty} {trade.symbol.upper()}"
+        self._persist_state()
         trade_log.record_trade(
             order_id=str(order.id),
             symbol=order.symbol,

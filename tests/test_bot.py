@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models import Candle, PullbackSetup, ScannerResponse, ScannerResult, Signal, StockCandidate, StrategyDecision, TradeRequest
-from app.services import bankroll, trade_log
-from app.services.bot import TradingBot
+from app.services import bankroll, bot_state, trade_log
+from app.services.bot import TradingBot, current_trading_day
 
 
 def _fund_bankroll(monkeypatch, amount=100_000.0):
@@ -547,3 +547,70 @@ def test_auto_cycle_no_longer_manages_positions_itself(tmp_path, monkeypatch):
         bot.auto_cycle()
 
     MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_a_new_trading_bot_restores_auto_trading_enabled_across_a_restart(tmp_path, monkeypatch):
+    """The actual bug this fixes: every deploy restarts the process, and
+    auto_trading_enabled used to live only in memory - silently reverting to off with no
+    signal to anyone, discovered live when it kept happening after routine updates."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    first = TradingBot()
+    first.start_auto_trading()
+
+    second = TradingBot()  # simulates the process restarting
+
+    assert second.status.auto_trading_enabled is True
+
+
+def test_a_new_trading_bot_restores_todays_risk_counters(tmp_path, monkeypatch):
+    """A crash mid-session shouldn't reset the walk-away safety counters - otherwise a
+    crash-loop could quietly let the bot keep re-entering past what the daily discipline
+    rules intended."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    first = TradingBot()
+    first.status.walked_away_for_day = True
+    first.status.walk_away_reason = "3 losing trades in a row"
+    first.status.consecutive_losses = 3
+    first._persist_state()
+
+    second = TradingBot()
+
+    assert second.status.walked_away_for_day is True
+    assert second.status.walk_away_reason == "3 losing trades in a row"
+    assert second.status.consecutive_losses == 3
+
+
+def test_stale_persisted_state_from_a_previous_day_resets_normally(tmp_path, monkeypatch):
+    """Restoring stale state on startup is harmless - refresh_status()'s existing
+    day-rollover check resets it the same way it already handles a rollover that happens
+    mid-session, so a restart after days offline doesn't replay a stale walk-away."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    stale_day = (current_trading_day() - timedelta(days=3)).isoformat()
+    bot_state.save(
+        auto_trading_enabled=True, trading_day=stale_day, trades_today=4,
+        peak_daily_pnl=99.0, consecutive_losses=3, walked_away_for_day=True,
+        walk_away_reason="3 losing trades in a row", auto_trading_started_at=None,
+    )
+
+    bot = TradingBot()
+    bot.refresh_status()  # triggers the day-rollover check
+
+    assert bot.status.auto_trading_enabled is True  # the toggle itself isn't daily state
+    assert bot.status.trades_today == 0
+    assert bot.status.walked_away_for_day is False
+    assert bot.status.walk_away_reason is None
+
+
+def test_stopping_auto_trading_persists_across_a_restart_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    first = TradingBot()
+    first.start_auto_trading()
+    first.stop_auto_trading()
+
+    second = TradingBot()
+
+    assert second.status.auto_trading_enabled is False
