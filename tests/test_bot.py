@@ -473,6 +473,64 @@ def test_manage_open_positions_closes_on_a_red_candle_exit_signal(tmp_path, monk
     assert exited == ["ACHR"]
 
 
+def test_manage_open_positions_cancels_resting_orders_before_selling(tmp_path, monkeypatch):
+    """An auto-entered position has a stop-loss RESTING at the broker, which holds the
+    shares - Alpaca rejects a second sell for held shares outright, so without a cancel
+    first the exit-signal close never actually works for any auto-entered position."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+
+    fake_order = MagicMock()
+    fake_order.id = "exit-order-5"
+    fake_order.symbol = "ACHR"
+    fake_order.status = "accepted"
+
+    resting_stop = MagicMock()
+    resting_stop.id = "resting-stop-1"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.open_orders.return_value = [resting_stop]
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot._manage_open_positions([{"symbol": "ACHR", "qty": 10}])
+
+    MockBroker.return_value.open_orders.assert_called_once_with("ACHR")
+    MockBroker.return_value.cancel_order.assert_called_once_with("resting-stop-1")
+    MockBroker.return_value.submit_market_order.assert_called_once()
+
+
+def test_manage_open_positions_links_the_exit_back_to_the_buy_row(tmp_path, monkeypatch):
+    """The closing sell isn't a bracket leg of the original buy order, so without an
+    explicit link the buy row would look open forever - no realized P&L for the
+    walk-away rules, and deployed_capital charging the bankroll for a closed position."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    trade_log.record_trade(order_id="orig-buy-1", symbol="ACHR", side="buy", qty=10, status="filled")
+    trade_log.update_fill(order_id="orig-buy-1", status="filled", filled_avg_price=5.0, filled_qty=10, filled_at=datetime.now(UTC).isoformat())
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+
+    fake_order = MagicMock()
+    fake_order.id = "closing-sell-1"
+    fake_order.symbol = "ACHR"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot._manage_open_positions([{"symbol": "ACHR", "qty": 10}])
+
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "orig-buy-1")
+    assert buy["exit_order_id"] == "closing-sell-1"
+    assert buy["exit_reason"] == "exit_signal"
+    assert buy["realized_pnl"] is None  # completed by trade_sync once the sell fills
+
+
 def test_manage_open_positions_leaves_a_quiet_position_open(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()

@@ -27,7 +27,7 @@ from app.models import (
     TradeRequest,
 )
 from app.paths import resource_path
-from app.services import bankroll, trade_log
+from app.services import bankroll, trade_log, trade_sync
 from app.services.backtest import run_backtest
 from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
@@ -36,12 +36,25 @@ from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 
 
+def _sync_orders_headless() -> None:
+    """Server-side fill/exit reconciliation - the dashboard's own periodic sync only
+    happens while a browser has the page open, and the bankroll gate plus walk-away
+    rules read directly from what this records. Skipping when the broker isn't
+    configured (or a sync hiccups) is fine; the next cycle retries."""
+    try:
+        trade_sync.sync_orders(AlpacaBroker())
+    except Exception:
+        pass
+
+
 async def _automation_loop() -> None:
-    """Runs for the life of the server. manage_open_positions() always runs - a position
-    doesn't stop needing protection just because new-entry auto-trading is switched off -
-    while auto_cycle() (new entries) is a no-op unless auto-trading is on."""
+    """Runs for the life of the server. Order syncing and manage_open_positions()
+    always run - fills/exits must reconcile and open positions stay protected whether
+    or not new-entry auto-trading is switched on - while auto_cycle() (new entries) is
+    a no-op unless auto-trading is enabled."""
     while True:
         try:
+            await asyncio.to_thread(_sync_orders_headless)
             await asyncio.to_thread(bot.manage_open_positions)
             if bot.status.auto_trading_enabled:
                 await asyncio.to_thread(bot.auto_cycle)
@@ -360,45 +373,7 @@ def sync_trade_history():
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    for order_id in trade_log.pending_order_ids():
-        try:
-            order = broker.get_order(order_id)
-        except Exception:
-            continue
-        trade_log.update_fill(
-            order_id=order_id,
-            status=_enum_str(order.status),
-            filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price is not None else None,
-            filled_qty=float(order.filled_qty) if order.filled_qty is not None else None,
-            filled_at=order.filled_at.isoformat() if order.filled_at is not None else None,
-        )
-
-    for trade in trade_log.trades_awaiting_exit():
-        try:
-            order = broker.get_order(trade["order_id"])
-        except Exception:
-            continue
-        filled_leg = next(
-            (leg for leg in (order.legs or []) if _enum_str(leg.status) == "filled"),
-            None,
-        )
-        if filled_leg is None or filled_leg.filled_avg_price is None:
-            continue
-        exit_reason = "target" if _enum_str(filled_leg.order_type) == "limit" else "stop"
-        exit_price = float(filled_leg.filled_avg_price)
-        exit_qty = float(filled_leg.filled_qty) if filled_leg.filled_qty is not None else trade["qty"]
-        entry_price = trade["filled_avg_price"] or 0.0
-        pnl = (exit_price - entry_price) * exit_qty if trade["side"] == "buy" else (entry_price - exit_price) * exit_qty
-        trade_log.record_exit(
-            order_id=trade["order_id"],
-            exit_order_id=str(filled_leg.id),
-            exit_price=exit_price,
-            exit_qty=exit_qty,
-            exit_at=filled_leg.filled_at.isoformat() if filled_leg.filled_at is not None else None,
-            exit_reason=exit_reason,
-            realized_pnl=round(pnl, 2),
-        )
-
+    trade_sync.sync_orders(broker)
     return {"trades": trade_log.list_trades(limit=50)}
 
 

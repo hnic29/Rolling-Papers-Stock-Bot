@@ -27,6 +27,20 @@ def test_risk_rejects_max_trade_count():
         RiskManager().validate(TradeRequest(symbol="AAPL", qty=1, side=Signal.buy), 5, 0)
 
 
+def test_risk_never_blocks_a_sell_at_the_daily_trade_cap(monkeypatch):
+    """The trade cap exists to stop opening NEW risk - blocking sells meant that once
+    it tripped, an exit signal could no longer close a position."""
+    _fund(monkeypatch, 2000.0)
+    RiskManager().validate(TradeRequest(symbol="AAPL", qty=1, side=Signal.sell), 5, 0)
+
+
+def test_risk_never_blocks_a_sell_past_the_daily_loss_limit(monkeypatch):
+    """Same principle for the loss limit - a bot that's down its daily max is exactly
+    the bot that most needs to be able to close its losing positions."""
+    _fund(monkeypatch, 2000.0)
+    RiskManager().validate(TradeRequest(symbol="AAPL", qty=1, side=Signal.sell), 0, -500.0)
+
+
 def test_risk_rejects_max_daily_loss(monkeypatch):
     _fund(monkeypatch, 2000.0)  # 6% cap = $120
     with pytest.raises(ValueError, match="Max daily loss"):

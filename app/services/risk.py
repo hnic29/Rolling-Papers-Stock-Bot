@@ -9,6 +9,14 @@ class RiskManager:
             raise ValueError("Only buy and sell orders can be submitted.")
         if trade.qty <= 0:
             raise ValueError("Quantity must be positive.")
+
+        # Everything below only gates BUYS - these limits exist to stop opening NEW
+        # risk, and must never block a sell that reduces it. Blocking sells meant that
+        # once the day's trade cap or loss limit tripped, an exit signal could no
+        # longer close a losing position - the exact moment closing matters most.
+        if trade.side.value != "buy":
+            return self._validate_bracket_prices(trade)
+
         if trades_today >= settings.max_trades_per_day:
             raise ValueError("Max trades per day reached.")
 
@@ -31,15 +39,19 @@ class RiskManager:
                 if estimated_position_value > max_position_value:
                     raise ValueError("Requested trade exceeds max position value setting.")
 
-        if trade.stop_loss_price is not None or trade.take_profit_price is not None:
-            if trade.qty != int(trade.qty):
-                raise ValueError("Stop-loss/take-profit orders require a whole-share quantity.")
-            if trade.stop_loss_price is not None and trade.stop_loss_price <= 0:
-                raise ValueError("Stop-loss price must be positive.")
-            if trade.take_profit_price is not None and trade.take_profit_price <= 0:
-                raise ValueError("Take-profit price must be positive.")
-            if trade.stop_loss_price is not None and trade.take_profit_price is not None:
-                if trade.side.value == "buy" and trade.stop_loss_price >= trade.take_profit_price:
-                    raise ValueError("Stop-loss must be below take-profit for a buy order.")
-                if trade.side.value == "sell" and trade.stop_loss_price <= trade.take_profit_price:
-                    raise ValueError("Stop-loss must be above take-profit for a sell order.")
+        self._validate_bracket_prices(trade)
+
+    def _validate_bracket_prices(self, trade: TradeRequest) -> None:
+        if trade.stop_loss_price is None and trade.take_profit_price is None:
+            return
+        if trade.qty != int(trade.qty):
+            raise ValueError("Stop-loss/take-profit orders require a whole-share quantity.")
+        if trade.stop_loss_price is not None and trade.stop_loss_price <= 0:
+            raise ValueError("Stop-loss price must be positive.")
+        if trade.take_profit_price is not None and trade.take_profit_price <= 0:
+            raise ValueError("Take-profit price must be positive.")
+        if trade.stop_loss_price is not None and trade.take_profit_price is not None:
+            if trade.side.value == "buy" and trade.stop_loss_price >= trade.take_profit_price:
+                raise ValueError("Stop-loss must be below take-profit for a buy order.")
+            if trade.side.value == "sell" and trade.stop_loss_price <= trade.take_profit_price:
+                raise ValueError("Stop-loss must be above take-profit for a sell order.")

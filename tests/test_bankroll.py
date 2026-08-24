@@ -117,3 +117,50 @@ def test_transactions_are_listed_most_recent_first():
     txns = bankroll.transactions()
     assert [t["note"] for t in txns] == ["second", "first"]
     assert all(t["kind"] == "withdrawal" for t in txns)
+
+
+def test_a_pending_buy_counts_as_deployed_at_its_estimated_price():
+    """The over-commitment bug: a submitted-but-unfilled buy held $0 in the ledger, so
+    a second candidate in the same scan cycle sized itself against a bankroll the first
+    had already spent."""
+    trade_log.record_trade(
+        order_id="pending-1", symbol="ACHR", side="buy", qty=100, status="accepted",
+        entry_price_estimate=5.0,
+    )
+
+    assert bankroll.deployed_capital() == 500.0
+
+
+def test_a_canceled_buy_does_not_count_as_deployed():
+    trade_log.record_trade(
+        order_id="canceled-1", symbol="ACHR", side="buy", qty=100, status="accepted",
+        entry_price_estimate=5.0,
+    )
+    trade_log.update_fill(order_id="canceled-1", status="canceled", filled_avg_price=None, filled_qty=None, filled_at=None)
+
+    assert bankroll.deployed_capital() == 0.0
+
+
+def test_a_filled_sell_row_never_counts_as_deployed():
+    """Regression: deployed_capital didn't filter by side, so the exit sell from a
+    signal-close counted as NEW deployment - a closed position double-charged the
+    bankroll forever (the sell row plus the still-open-looking buy row)."""
+    trade_log.record_trade(order_id="sell-1", symbol="ACHR", side="sell", qty=100, status="filled")
+    trade_log.update_fill(order_id="sell-1", status="filled", filled_avg_price=5.5, filled_qty=100, filled_at=datetime.now(UTC).isoformat())
+
+    assert bankroll.deployed_capital() == 0.0
+
+
+def test_a_buy_with_an_exit_in_flight_still_counts_as_deployed():
+    """The cash isn't back until the closing sell actually fills - a merely-submitted
+    exit shouldn't free up the bankroll yet."""
+    _open_trade("buy-1", "ACHR", 100, 5.0)
+    trade_log.record_pending_exit("buy-1", "sell-1", "exit_signal")
+
+    assert bankroll.deployed_capital() == 500.0
+
+
+def test_a_buy_with_a_confirmed_exit_stops_counting_as_deployed():
+    _closed_trade("buy-1", "ACHR", 100, 5.0, realized_pnl=25.0)
+
+    assert bankroll.deployed_capital() == 0.0

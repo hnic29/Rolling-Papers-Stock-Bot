@@ -1,6 +1,12 @@
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.requests import GetPortfolioHistoryRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    GetPortfolioHistoryRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
 from datetime import datetime
 
 from alpaca.common.enums import Sort
@@ -118,6 +124,13 @@ class AlpacaBroker:
 
     def get_order(self, order_id: str):
         return self.client.get_order_by_id(order_id)
+
+    def open_orders(self, symbol: str):
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol.upper()])
+        return self.client.get_orders(filter=request)
+
+    def cancel_order(self, order_id: str) -> None:
+        self.client.cancel_order_by_id(order_id)
 
     def latest_quote(self, symbol: str) -> dict:
         request = StockLatestQuoteRequest(symbol_or_symbols=symbol.upper(), feed=DataFeed.IEX)

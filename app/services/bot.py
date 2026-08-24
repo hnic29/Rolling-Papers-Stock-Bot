@@ -248,11 +248,34 @@ class TradingBot:
                 setup = build_pullback_setup(symbol, self.scanner)
                 if not self.strategy.exit_indicators(setup):
                     continue
-                self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell))
+
+                # An auto-entered position has a stop-loss RESTING at the broker, and
+                # Alpaca holds the shares for that open order - a second sell for the
+                # same shares gets rejected outright ("insufficient qty available").
+                # Cancel every open order on the symbol first or this close never works.
+                self._cancel_open_orders(symbol)
+
+                result = self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell))
+
+                # Link the closing sell back to the original buy row(s) - it isn't a
+                # bracket leg of the buy order, so without this link the buy would look
+                # open forever (never any realized P&L for the walk-away rules, and
+                # deployed_capital would keep charging the bankroll for a closed
+                # position). trade_sync completes the exit once the sell fills.
+                for buy in trade_log.open_filled_buys(symbol):
+                    trade_log.record_pending_exit(buy["order_id"], result["id"], "exit_signal")
                 exited.append(symbol)
             except Exception:
                 continue  # a single bad symbol/order should never stall managing the rest
         return exited
+
+    def _cancel_open_orders(self, symbol: str) -> None:
+        broker = AlpacaBroker()
+        for order in broker.open_orders(symbol):
+            try:
+                broker.cancel_order(str(order.id))
+            except Exception:
+                continue  # already filled/canceled in the race window - nothing to do
 
     def start_auto_trading(self) -> BotStatus:
         self.refresh_status()
@@ -465,6 +488,7 @@ class TradingBot:
             status=str(order.status.value if hasattr(order.status, "value") else order.status),
             stop_loss_price=trade.stop_loss_price,
             take_profit_price=trade.take_profit_price,
+            entry_price_estimate=trade.estimated_price if trade.side == Signal.buy else None,
         )
         return {"id": str(order.id), "status": str(order.status), "symbol": order.symbol}
 

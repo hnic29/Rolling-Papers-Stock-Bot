@@ -38,7 +38,7 @@ def _connect() -> sqlite3.Connection:
     )
     # Lightweight migration for databases created before stop/target or exit tracking
     # existed — CREATE TABLE IF NOT EXISTS is a no-op against an already-existing table.
-    for column in ("stop_loss_price", "take_profit_price", "exit_price", "exit_qty", "realized_pnl"):
+    for column in ("stop_loss_price", "take_profit_price", "exit_price", "exit_qty", "realized_pnl", "entry_price_estimate"):
         try:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {column} REAL")
         except sqlite3.OperationalError:
@@ -59,16 +59,31 @@ def record_trade(
     status: str,
     stop_loss_price: float | None = None,
     take_profit_price: float | None = None,
+    entry_price_estimate: float | None = None,
 ) -> None:
+    """entry_price_estimate lets bankroll.deployed_capital() count a buy the moment it's
+    submitted rather than only once it fills - without it, everything between submission
+    and fill-sync looks like free money and a second candidate in the same scan cycle
+    would size itself against a bankroll the first one already committed."""
     conn = _connect()
     with conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO trades
-                (order_id, submitted_at, symbol, side, qty, status, stop_loss_price, take_profit_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (order_id, submitted_at, symbol, side, qty, status, stop_loss_price, take_profit_price, entry_price_estimate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (order_id, datetime.now(UTC).isoformat(), symbol.upper(), side, qty, status, stop_loss_price, take_profit_price),
+            (
+                order_id,
+                datetime.now(UTC).isoformat(),
+                symbol.upper(),
+                side,
+                qty,
+                status,
+                stop_loss_price,
+                take_profit_price,
+                entry_price_estimate,
+            ),
         )
     conn.close()
 
@@ -103,6 +118,48 @@ def record_exit(
             (exit_order_id, exit_price, exit_qty, exit_at, exit_reason, realized_pnl, order_id),
         )
     conn.close()
+
+
+def record_pending_exit(order_id: str, exit_order_id: str, exit_reason: str) -> None:
+    """Links a standalone closing sell to the original buy row the moment the sell is
+    submitted - the sell fills asynchronously, so exit_price/realized_pnl stay NULL
+    until trade_sync completes them (see trades_with_pending_exit). Without this link
+    the buy row would look open forever: the sell isn't one of its bracket legs, so
+    the legs-based sync path would never find it."""
+    conn = _connect()
+    with conn:
+        conn.execute(
+            "UPDATE trades SET exit_order_id = ?, exit_reason = ? WHERE order_id = ?",
+            (exit_order_id, exit_reason, order_id),
+        )
+    conn.close()
+
+
+def trades_with_pending_exit() -> list[dict]:
+    """Buy rows whose closing sell was submitted (exit_order_id set) but hasn't been
+    confirmed filled yet (realized_pnl still NULL) - trade_sync polls these."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM trades WHERE side = 'buy' AND exit_order_id IS NOT NULL AND realized_pnl IS NULL"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def open_filled_buys(symbol: str | None = None) -> list[dict]:
+    """Filled buys with no exit recorded or in flight - the rows a closing sell should
+    link back to. Oldest first, so multi-lot positions close FIFO."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    query = "SELECT * FROM trades WHERE side = 'buy' AND status = 'filled' AND exit_order_id IS NULL"
+    params: tuple = ()
+    if symbol is not None:
+        query += " AND symbol = ?"
+        params = (symbol.upper(),)
+    rows = conn.execute(query + " ORDER BY submitted_at ASC", params).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def trades_awaiting_exit() -> list[dict]:

@@ -73,19 +73,34 @@ def current_bankroll() -> float:
 
 
 def deployed_capital() -> float:
-    """Cost basis of the bot's currently-open positions (filled, not yet
-    exited) — money that's tied up and can't be withdrawn back to savings
-    or spent on a new trade until the position closes."""
+    """Cost basis of the bot's currently-committed money — filled positions not yet
+    exited, plus buys that are submitted but haven't filled yet (counted at the
+    estimated entry price recorded at submission). Pending buys matter: without them,
+    everything between submission and fill-sync looks like free money, so a second
+    candidate in the same scan cycle would size itself against a bankroll the first
+    one already spent. Buys only — a sell row is an exit returning money, and counting
+    it as deployment (as this once did) double-charged every closed position forever."""
     conn = _connect()
+    # (exit_order_id IS NULL OR realized_pnl IS NULL): a buy stays deployed until its
+    # exit is CONFIRMED filled (realized_pnl set by trade_sync), not merely submitted -
+    # the cash isn't back until the closing sell actually executes.
     rows = conn.execute(
         """
-        SELECT filled_qty, filled_avg_price FROM trades
-        WHERE status = 'filled' AND exit_order_id IS NULL
-          AND filled_qty IS NOT NULL AND filled_avg_price IS NOT NULL
+        SELECT status, qty, filled_qty, filled_avg_price, entry_price_estimate FROM trades
+        WHERE side = 'buy'
+          AND (exit_order_id IS NULL OR realized_pnl IS NULL)
+          AND status NOT IN ('canceled', 'rejected', 'expired')
         """
     ).fetchall()
     conn.close()
-    return round(sum((qty or 0) * (price or 0) for qty, price in rows), 2)
+
+    total = 0.0
+    for status, qty, filled_qty, filled_avg_price, entry_price_estimate in rows:
+        if status == "filled" and filled_qty is not None and filled_avg_price is not None:
+            total += filled_qty * filled_avg_price
+        elif status != "filled" and entry_price_estimate is not None:
+            total += (qty or 0) * entry_price_estimate
+    return round(total, 2)
 
 
 def available_to_trade() -> float:
