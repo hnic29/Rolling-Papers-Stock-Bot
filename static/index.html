@@ -51,6 +51,16 @@
           </span>
           Bankroll
         </button>
+        <button class="tab" data-view="strategy">
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <circle cx="12" cy="12" r="5" />
+              <circle cx="12" cy="12" r="1" />
+            </svg>
+          </span>
+          Strategy
+        </button>
         <button class="tab" data-view="backtest">Backtest</button>
         <button class="tab" data-view="settings">Settings</button>
       </nav>
@@ -346,6 +356,192 @@
           <h2>Statement</h2>
           <ul id="bankroll-transactions" class="bankroll-transactions">
             <li class="txn-empty">No transactions yet.</li>
+          </ul>
+        </article>
+      </section>
+
+      <section id="strategy-view" class="view strategy-view">
+        <nav class="section-nav" aria-label="Jump to section">
+          <a class="section-nav-link" href="#strategy-overview">Overview</a>
+          <a class="section-nav-link" href="#strategy-universe">Universe</a>
+          <a class="section-nav-link" href="#strategy-pillars">5 Pillars</a>
+          <a class="section-nav-link" href="#strategy-entry">Entry</a>
+          <a class="section-nav-link" href="#strategy-sizing">Sizing</a>
+          <a class="section-nav-link" href="#strategy-exit">Exit</a>
+          <a class="section-nav-link" href="#strategy-discipline">Discipline</a>
+          <a class="section-nav-link" href="#strategy-cycle">The Cycle</a>
+          <a class="section-nav-link" href="#strategy-states">Bot States</a>
+          <a class="section-nav-link" href="#strategy-honesty">Limitations</a>
+        </nav>
+
+        <article class="panel strategy-panel" id="strategy-overview">
+          <h2>Overview</h2>
+          <p>
+            This bot runs a rules-based version of the small-account momentum strategy popularized by day trader
+            Ross Cameron (Warrior Trading): find a stock that's already moving hard on real volume, wait for it to
+            pull back and hold, then buy the moment it breaks back to a new high — with a hard stop below the
+            pullback and no fixed ceiling on the upside. It is <strong>not</strong> a "buy good companies" strategy.
+            It deliberately hunts small, thinly-floated, volatile stocks having an unusually active day, because
+            those are the ones capable of the fast, large percentage moves this style of trading targets.
+          </p>
+          <p class="chart-hint">
+            Every rule described on this page is enforced in code, not just intent — <code>app/strategies/small_account_pullback.py</code>
+            is the actual decision engine, used identically by manual "Run Tick", full automation, and the backtester.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-universe">
+          <h2>The Universe — What Stocks It Even Looks At</h2>
+          <p>
+            The bot never scans the whole market. It only ever looks at symbols in <code>data/stock_universe.txt</code>,
+            a list built by live-screening every tradable NASDAQ/NYSE/AMEX stock (<code>scripts/build_universe.py</code>)
+            against three cheap, structural filters:
+          </p>
+          <dl>
+            <dt>Price</dt><dd>$2 – $20</dd>
+            <dt>Float</dt><dd>1,000,000 – 20,000,000 shares</dd>
+            <dt>Liquidity floor</dt><dd>&ge; 50,000 shares/day average (just excludes dead/halted tickers)</dd>
+          </dl>
+          <p>
+            The float floor and ceiling matter most: a stock with billions of shares outstanding (think AAPL or
+            TSLA) mathematically cannot move the way this strategy needs no matter how good the rest of the logic
+            is, and a stock with only a few hundred thousand shares of float is thin enough that real-world
+            slippage can make it barely tradeable even when it's "eligible" on paper. This list currently holds a
+            handful of genuinely small-float names — nothing close to the S&amp;P 500.
+          </p>
+          <p class="chart-hint">
+            This list is a snapshot, not a live feed — it only updates when <code>scripts/build_universe.py</code> is
+            re-run. The bot watches its own age and adds a note to the status message once it's 45+ days old.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-pillars">
+          <h2>The Five Pillars — Scoring a Candidate</h2>
+          <p>Every symbol in the universe gets scanned and scored against five independent checks. A stock needs at least <strong>4 of 5</strong> to be considered a candidate at all — anything less is marked <code>hold</code> and never evaluated further.</p>
+          <ol class="strategy-pillar-list">
+            <li><strong>Relative volume &ge; 5x</strong> — today's volume-so-far vs. a same-time-of-day-adjusted average of the last ~80 days. (Comparing partial-day volume against a naive full-day average would understate this all morning — the bot prorates for exactly that reason.)</li>
+            <li><strong>Total volume &ge; 1,000,000 shares</strong> — enough real activity to actually get filled.</li>
+            <li><strong>Up at least 10% on the day</strong> — a real move, not noise.</li>
+            <li><strong>Price between $2 and $20</strong> — the "small account" sweet spot; cheap enough to size meaningfully, not so cheap it's a penny-stock trap.</li>
+            <li><strong>Float at or below 20,000,000 shares</strong> — genuinely small-float, the structural reason it can move fast.</li>
+          </ol>
+          <p class="chart-hint">
+            News catalyst and "hot sector" (AI, biotech, China/Chinese tech, tech) are also surfaced as reasons in the scanner, but they're informational only — they never add to the score.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-entry">
+          <h2>The Entry — First Pullback, New High</h2>
+          <p>Clearing 4-of-5 only makes a stock a <em>candidate</em>. To actually trigger a buy, its most recent 1-minute candles must also pass every one of these — a single failure anywhere returns <code>hold</code>, not a partial trade:</p>
+          <ul class="strategy-check-list">
+            <li>The pullback retraced <strong>50% or less</strong> of the prior move up (a deeper retrace means the move is probably over)</li>
+            <li>The proposed entry price is <strong>above the 9-period EMA</strong> (still in the short-term uptrend)</li>
+            <li>The pullback candle <strong>closed above VWAP</strong> (buyers are still in control on average)</li>
+            <li><strong>MACD is positive</strong> — skipped for the first ~26 minutes of the session, before it's meaningfully warmed up, rather than treating an undefined reading as a rejection</li>
+            <li>The <strong>most recent candle just broke to a new high</strong> — this is the actual trigger; everything else just qualifies the setup</li>
+            <li>Volume on the pullback is <strong>lighter than volume on the push up</strong> (healthy, low-conviction selling, not a real reversal)</li>
+          </ul>
+          <p>The stop-loss is set just below the pullback's low. Risk per share is entry minus stop — this number drives position sizing below.</p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-sizing">
+          <h2>Position Sizing — How Many Shares</h2>
+          <p>
+            Every buy is sized by the <strong>smallest</strong> of three independent caps, all computed live off your
+            actual trading bankroll (never a fixed dollar figure — see the Bankroll tab for what that means):
+          </p>
+          <dl>
+            <dt>Risk cap</dt><dd>2% of bankroll &divide; risk-per-share</dd>
+            <dt>Position cap</dt><dd>20% of bankroll &divide; entry price</dd>
+            <dt>Bankroll cap</dt><dd>whatever's actually still available to trade &divide; entry price</dd>
+          </dl>
+          <p class="chart-hint">
+            Whichever of the three produces the fewest shares wins. If that's zero, the trade is skipped entirely — no partial/rounding-up trades.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-exit">
+          <h2>The Exit — Stop-Loss Always, No Fixed Ceiling</h2>
+          <p>
+            Every auto-entered position rests <strong>one</strong> order at the broker: the stop-loss. There is
+            deliberately <strong>no automatic take-profit</strong>. Ross Cameron's own philosophy is to hold a
+            genuine winner past the first visible resistance level rather than cap it there — a fixed take-profit
+            would work against that on purpose.
+          </p>
+          <p>Instead, every open position is re-evaluated every automation cycle for real signs the move is over — the same <code>exit_indicators()</code> check a fresh candle would use:</p>
+          <ul class="strategy-check-list">
+            <li>A <strong>topping-tail candle</strong> forms (a long upper wick — buyers pushed it up, sellers rejected it hard)</li>
+            <li>The latest candle <strong>closes red</strong></li>
+            <li>Level-two order flow shows a large seller, a hidden seller, a burst of selling, or buying visibly slowing (see <a href="#strategy-honesty">Limitations</a> — not live-wired yet)</li>
+          </ul>
+          <p>
+            The instant any of these fires, the bot cancels the resting stop-loss order and submits a market sell —
+            so a winner can run indefinitely, but the moment real deterioration shows up, it's out.
+          </p>
+          <p class="chart-hint">
+            This monitoring runs on <strong>every</strong> open position, every cycle, regardless of how it was opened (auto or manual) and regardless of whether Auto-Trading is currently switched on — see <a href="#strategy-states">Bot States</a>.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-discipline">
+          <h2>Daily Discipline — When It Stops For The Day</h2>
+          <p>Three separate rules can pause <strong>new entries</strong> for the rest of the trading day. Any one of them tripping sets a <code>walked_away_for_day</code> flag that only clears at the next trading day:</p>
+          <ul class="strategy-check-list">
+            <li><strong>3 losing trades in a row</strong></li>
+            <li><strong>Giving back 50%+ of the day's peak realized profit</strong> (locks in that you had a good day, even if it's fading)</li>
+            <li><strong>60 minutes with no trade taken</strong> while auto-trading is on ("momentum has cooled")</li>
+          </ul>
+          <p>
+            Walking away only pauses <em>new</em> risk. Existing open positions are still watched and protected the
+            entire time — see the exit logic above. This state, along with today's trade count and P&amp;L, survives
+            a server restart; it doesn't quietly reset if the app crashes or gets redeployed mid-session.
+          </p>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-cycle">
+          <h2>The Automation Cycle — Every 2 Minutes, In Order</h2>
+          <p>While the bot process is running, this sequence repeats every 120 seconds, every step independent of the others failing:</p>
+          <ol class="strategy-cycle-list">
+            <li><strong>Sync</strong> — reconcile every pending order and open exit against Alpaca's real fill data. This runs headless, with or without the dashboard open.</li>
+            <li><strong>Manage open positions</strong> — check every held position for an exit indicator, close if one fired. <em>Runs unconditionally</em>, even with Auto-Trading off.</li>
+            <li><strong>Stop here if Auto-Trading is off.</strong> Nothing below this line runs.</li>
+            <li>Check the market is actually open (Alpaca's own clock, not a guess)</li>
+            <li>Check today's walk-away state — new entries pause if already tripped</li>
+            <li>Check the trading window (9:30 AM – 4:00 PM ET)</li>
+            <li>Check the bankroll has anything available to trade</li>
+            <li><strong>Scan</strong> the universe, score every symbol, rank by score</li>
+            <li>For each qualifying candidate not already held, run the full entry pattern check and submit a sized buy if it triggers</li>
+          </ol>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-states">
+          <h2>How The Bot Behaves — Every State It Can Be In</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Situation</th><th>New entries</th><th>Existing positions</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Market closed / weekend / holiday</td><td class="down">Paused</td><td class="up">Watched (once market reopens)</td></tr>
+                <tr><td>Outside the 9:30–16:00 ET trading window</td><td class="down">Paused</td><td class="up">Watched</td></tr>
+                <tr><td>Walked away for the day</td><td class="down">Paused</td><td class="up">Watched</td></tr>
+                <tr><td>Bankroll is $0 or fully deployed</td><td class="down">Paused</td><td class="up">Watched</td></tr>
+                <tr><td><strong>Auto-Trading toggled off</strong></td><td class="down">Paused</td><td class="up">Still watched — protection never depends on this toggle</td></tr>
+                <tr><td>Paper mode (default)</td><td class="up">Simulated only</td><td class="up">Simulated only</td></tr>
+                <tr><td>Live mode</td><td colspan="2">Requires paper mode off <em>and</em> "Allow live trading" checked <em>and</em> an explicit confirmation dialog — the dashboard then shows a persistent red "LIVE — REAL MONEY" so there's never ambiguity about which world you're in.</td></tr>
+                <tr><td>Server restarts / redeploys</td><td colspan="2">Auto-Trading on/off, today's trade count, and the walk-away state all restore automatically — nothing silently resets.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel strategy-panel" id="strategy-honesty">
+          <h2>Honest Limitations</h2>
+          <ul class="strategy-check-list">
+            <li><strong>Level-two order flow isn't live-wired.</strong> The strategy code supports it (large seller, hidden seller, red-tape burst, buying slowing), but nothing currently feeds it real data — those specific exit signals never fire in practice today. The candle-based exits (topping tail, red close) do the real work.</li>
+            <li><strong>Float data is a periodic snapshot</strong> (from Yahoo Finance via <code>scripts/backfill_float_data.py</code>), not a live per-trade lookup — float genuinely doesn't move often, but it can drift.</li>
+            <li><strong>The universe list only updates when manually re-run.</strong> The 45-day staleness warning tells you when, but nothing does it automatically yet.</li>
+            <li><strong>Backtesting has real gaps too:</strong> historical news and float data aren't available for past dates, so those two of the five pillars never score in a backtest, and Alpaca's free data feed typically only goes back to around 2020.</li>
           </ul>
         </article>
       </section>

@@ -1006,6 +1006,87 @@ td {
   font-size: 11.5px;
 }
 
+.strategy-panel {
+  max-width: 760px;
+}
+
+.strategy-panel h2 {
+  margin-bottom: 12px;
+}
+
+.strategy-panel p {
+  line-height: 1.6;
+}
+
+.strategy-panel p + p {
+  margin-top: 12px;
+}
+
+.strategy-panel .chart-hint {
+  margin-top: 12px;
+}
+
+.strategy-panel dl {
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-radius: 6px;
+  grid-template-columns: 200px 1fr;
+  margin: 14px 0;
+  padding: 14px 16px;
+}
+
+.strategy-pillar-list,
+.strategy-check-list,
+.strategy-cycle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  counter-reset: strategy-counter;
+}
+
+.strategy-pillar-list li,
+.strategy-cycle-list li {
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-left: 2px solid #7cf0b3;
+  border-radius: 6px;
+  counter-increment: strategy-counter;
+  line-height: 1.55;
+  padding: 12px 14px 12px 44px;
+  position: relative;
+}
+
+.strategy-pillar-list li::before,
+.strategy-cycle-list li::before {
+  content: counter(strategy-counter);
+  color: #7cf0b3;
+  font-size: 12px;
+  font-weight: 700;
+  left: 14px;
+  position: absolute;
+  top: 13px;
+}
+
+.strategy-check-list li {
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-left: 2px solid #8ab4f8;
+  border-radius: 6px;
+  background: rgba(4, 11, 19, 0.46);
+  line-height: 1.55;
+  padding: 12px 14px;
+}
+
+.strategy-view .table-wrap {
+  margin-top: 4px;
+}
+
+.strategy-view table {
+  min-width: 640px;
+}
+
 @media (max-width: 760px) {
   .topbar,
   .grid,
