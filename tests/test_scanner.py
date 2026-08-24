@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -86,3 +86,34 @@ def test_fmp_float_lookup_runs_for_a_symbol_clearing_the_cheap_pillars(monkeypat
     scanner.fmp.shares_float.assert_called_once_with("HOTT")
     assert response.results[0].float_shares == 5_000_000
     assert response.results[0].score == 5
+
+
+def test_universe_age_days_reads_the_build_date_from_the_header(tmp_path):
+    universe_path = tmp_path / "stock_universe.txt"
+    universe_path.write_text(
+        "# Built by scripts/build_universe.py on 2026-08-01 - live-screened for price...\nAAPL\n",
+        encoding="utf-8",
+    )
+    scanner = MarketScanner()
+    scanner.universe_path = universe_path
+
+    built = datetime(2026, 8, 1, tzinfo=UTC).date()
+    expected_age = (datetime.now(UTC).date() - built).days
+
+    assert scanner.universe_age_days() == expected_age
+
+
+def test_universe_age_days_is_none_without_a_recognizable_header(tmp_path):
+    universe_path = tmp_path / "stock_universe.txt"
+    universe_path.write_text("AAPL\nTSLA\n", encoding="utf-8")
+    scanner = MarketScanner()
+    scanner.universe_path = universe_path
+
+    assert scanner.universe_age_days() is None
+
+
+def test_universe_age_days_is_none_when_the_file_is_missing(tmp_path):
+    scanner = MarketScanner()
+    scanner.universe_path = tmp_path / "does_not_exist.txt"
+
+    assert scanner.universe_age_days() is None

@@ -45,6 +45,11 @@ MIN_AVG_VOLUME = 50_000
 # produces symbols that pass this screen but can never actually clear score_candidate's
 # real check, the same structural mismatch that made the old hand-picked list useless.
 MAX_FLOAT = SmallAccountPullbackStrategy.max_float
+# A floor, not just a ceiling - float this thin (a few hundred thousand shares) is more
+# "mathematically eligible" than "actually tradeable": real-world spreads and slippage on
+# names this illiquid can be brutal in ways Alpaca's paper fills don't honestly represent.
+# 1M still comfortably covers genuine small-float runners without the most extreme tail.
+MIN_FLOAT = 1_000_000
 CHUNK_SIZE = 300
 
 
@@ -103,7 +108,7 @@ def screen_by_float(symbols: list[str]) -> dict[str, int]:
             float_shares = yf.Ticker(symbol).info.get("floatShares")
         except Exception:
             float_shares = None
-        if float_shares and float_shares <= MAX_FLOAT:
+        if float_shares and MIN_FLOAT <= float_shares <= MAX_FLOAT:
             qualifying[symbol] = int(float_shares)
             print(f"  [{i}/{len(symbols)}] {symbol}: MATCH, float={int(float_shares):,}", flush=True)
         elif i % 25 == 0:
@@ -138,8 +143,10 @@ def main() -> None:
         return
 
     UNIVERSE_PATH.write_text(
-        "# Built by scripts/build_universe.py - live-screened for price $2-$20, "
-        f"avg volume >= {MIN_AVG_VOLUME:,}/day, and float <= {MAX_FLOAT:,} shares.\n"
+        f"# Built by scripts/build_universe.py on {datetime.now(UTC).date().isoformat()} - live-screened for "
+        f"price ${MIN_PRICE}-${MAX_PRICE}, avg volume >= {MIN_AVG_VOLUME:,}/day, "
+        f"and float {MIN_FLOAT:,}-{MAX_FLOAT:,} shares. Re-run this periodically - float, "
+        "price, and volume all drift, and this is only ever a snapshot.\n"
         + "\n".join(sorted(matches)) + "\n",
         encoding="utf-8",
     )

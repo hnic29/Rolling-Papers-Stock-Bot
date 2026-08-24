@@ -1,18 +1,13 @@
-# Built by scripts/build_universe.py - live-screened for price $2-$20, avg volume >= 50,000/day, and float <= 20,000,000 shares.
+# Built by scripts/build_universe.py on 2026-08-24 - live-screened for price $2.0-$20.0, avg volume >= 50,000/day, and float 1,000,000-20,000,000 shares. Re-run this periodically - float, price, and volume all drift, and this is only ever a snapshot.
 BRUN
 BYND
-CISS
 DQ
-ELPW
 EROC
 FRNM
 GRPN
-KIDZ
 LBGJ
 MPLT
-RCON
 RLMD
 SECZ
 SION
 SMTK
-SXTC

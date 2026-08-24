@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, time as dtime, timedelta
 import csv
+import re
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,8 @@ MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN = dtime(9, 30)
 MARKET_CLOSE = dtime(16, 0)
 TRADING_SESSION_MINUTES = 390  # 9:30-16:00 ET
+
+_UNIVERSE_BUILD_DATE_PATTERN = re.compile(r"Built by scripts/build_universe\.py on (\d{4}-\d{2}-\d{2})")
 
 
 def _session_progress_fraction(now: datetime) -> float:
@@ -143,6 +146,23 @@ class MarketScanner:
             if symbol and not symbol.startswith("#"):
                 symbols.append(symbol)
         return sorted(set(symbols))
+
+    def universe_age_days(self) -> int | None:
+        """Days since scripts/build_universe.py last regenerated the universe list, read
+        from the build-date it stamps into its own header comment. None if the file's
+        missing or wasn't written by that script (e.g. hand-edited) - staleness can't be
+        judged either way, so this deliberately doesn't guess. Float, price, and volume
+        all drift over time; nothing re-runs that script automatically, so this is what
+        actually surfaces "this data is old" instead of it going silently stale forever."""
+        if not self.universe_path.exists():
+            return None
+        text = self.universe_path.read_text(encoding="utf-8")
+        first_line = text.splitlines()[0] if text else ""
+        match = _UNIVERSE_BUILD_DATE_PATTERN.search(first_line)
+        if not match:
+            return None
+        built_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+        return (datetime.now(UTC).date() - built_date).days
 
     def load_metadata(self) -> dict[str, dict]:
         if not self.metadata_path.exists():
