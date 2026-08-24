@@ -27,8 +27,8 @@ const WIZARD_STEPS = [
     title: "Welcome to Rolling Papers Bot",
     body: `
       <p>Rolling Papers Bot is a <strong>paper-first</strong> day-trading assistant for stocks, built on FastAPI and Alpaca.</p>
-      <p>Paper trading is on by default and live trading is blocked until you explicitly enable it — so it's safe to explore and experiment.</p>
-      <p>This wizard walks through connecting your account, reading the chart, placing a trade, and tracking whether it made or lost money. You can reopen it anytime with the <strong>Getting Started</strong> button.</p>
+      <p>Paper trading is on by default and live trading is blocked until you explicitly enable and confirm it — so it's safe to explore and experiment.</p>
+      <p>This wizard walks through connecting your account, funding your trading bankroll, placing a trade, tracking it, automating the strategy, and getting trade alerts on your phone. Reopen it anytime with the <strong>Getting Started</strong> button.</p>
     `,
   },
   {
@@ -45,12 +45,26 @@ const WIZARD_STEPS = [
     `,
   },
   {
+    title: "Fund your trading bankroll",
+    body: `
+      <p>The bot never trades with your whole account. Your Alpaca balance is treated as <strong>savings</strong>, and the bot can only ever spend what you've explicitly moved into its <strong>trading bankroll</strong> — like withdrawing cash from the bank before a trip.</p>
+      <ul>
+        <li>Open the <strong>Bankroll</strong> tab and use <strong>Savings &rarr; Trading Bankroll</strong> to withdraw an amount you're comfortable risking (e.g. $2,000)</li>
+        <li>Every trade — manual or automated — is blocked until the bankroll is funded, and no position can exceed what's available in it</li>
+        <li>Risk limits scale with the bankroll automatically: ~2% risked per trade, one position capped at 20% of it, and a daily loss limit of 6%</li>
+        <li>Move money back with <strong>Return to Savings</strong> anytime it isn't tied up in an open position; the Statement lists every transfer</li>
+      </ul>
+    `,
+  },
+  {
     title: "Get to know the dashboard",
     body: `
       <ul>
-        <li><strong>Status</strong> — bot mode, running state, today's trades and realized P&amp;L</li>
+        <li><strong>Status</strong> — bot mode (Paper or LIVE), running state, today's trades and realized P&amp;L</li>
         <li><strong>Market Clock</strong> — live clock plus a countdown to the next market open/close (NYSE hours)</li>
         <li><strong>Alpaca Ticker</strong> — quick bid/ask/mid quote for any symbol</li>
+        <li><strong>Market Scanner</strong> — scores symbols against the strategy's five stock-selection pillars (relative volume, total volume, % change, price range, float); the built-in universe is pre-screened to genuinely small-float $2–$20 stocks</li>
+        <li><strong>Backtest</strong> tab — replay the real strategy against historical minute data without touching your account</li>
       </ul>
     `,
   },
@@ -58,7 +72,7 @@ const WIZARD_STEPS = [
     title: "Read the candlestick chart",
     body: `
       <ul>
-        <li>Switch ranges with <strong>1D / 5D / 10D</strong>, or pick an exact date</li>
+        <li>Switch ranges with <strong>1D / 5D / 10D</strong> up to <strong>All</strong>, or pick an exact date</li>
         <li><strong>Scroll</strong> to zoom, <strong>drag</strong> to pan, <strong>double-click</strong> (or Reset Zoom) to reset</li>
         <li>The drawing toolbar adds trend lines, horizontal support/resistance, Fibonacci retracement, channels, rectangles, and text notes — pick a tool, click the chart to place points, <code>Esc</code> cancels</li>
       </ul>
@@ -69,27 +83,37 @@ const WIZARD_STEPS = [
     body: `
       <p>In <strong>Manual Paper Order</strong>: enter a symbol, quantity, an optional estimated price, choose Buy or Sell, then Submit.</p>
       <p>Since paper trading is on by default, this uses simulated money — a safe way to try things out.</p>
+      <p>Two gates apply to every buy: your <strong>bankroll</strong> must have enough available, and a single position can't exceed 20% of it. Attaching a stop loss is strongly recommended — a position without one is only protected by the bot's exit-signal monitoring.</p>
     `,
   },
   {
     title: "Track what you bought",
     body: `
-      <p>This is the part you asked about — after you buy something, here's where to watch it:</p>
       <ul>
-        <li><strong>Positions</strong> panel — every open position with entry price, current price, market value, and unrealized profit/loss in $ and %. <span class="up">Green</span> means you're up, <span class="down">red</span> means you're down. Refreshes automatically every 15 seconds.</li>
-        <li><strong>Performance</strong> panel — your total account equity over time (1D/1W/1M), with overall change in $ and %, so you can see whether the account as a whole is profitable.</li>
+        <li><strong>Positions</strong> panel — every open position with entry price, current price, market value, and unrealized profit/loss in $ and %. <span class="up">Green</span> means you're up, <span class="down">red</span> means you're down. Refreshes automatically every 20 seconds.</li>
+        <li><strong>Trade History</strong> — every order this app ever submitted, with fill prices, exit price, <em>why</em> it exited (target, stop, or exit signal), and realized P&amp;L per trade</li>
+        <li><strong>Performance</strong> panel — total account equity over time (1D/1W/1M) with overall change in $ and %</li>
+        <li>The <strong>Bankroll</strong> tab shows how much is deployed in open positions vs. still available, and the bankroll's own realized P&amp;L</li>
       </ul>
     `,
   },
   {
     title: "Automate it (optional)",
     body: `
-      <p>Two ways to run the strategy from the top bar:</p>
+      <p><strong>Auto-Trading</strong> (top bar, off by default) runs the strategy hands-free during market hours: every couple of minutes it scans the small-float universe, and for a genuine buy signal — a first pullback holding above VWAP and the 9&nbsp;EMA with a new-high break — it buys with a <strong>stop-loss resting at the broker</strong>.</p>
+      <p>There's deliberately <em>no</em> automatic profit target: winners are held past the first level, and the bot re-checks every open position each cycle for real exit indicators (a red candle, a topping tail) and sells when one fires. That position monitoring runs <strong>even when auto-trading is off</strong> — anything you hold is always being watched while the market is open.</p>
+      <p>Daily discipline rules pause new entries for the rest of the day: 3 losing trades in a row, giving back half the day's peak profit, or an hour passing without a trade. All of this state survives restarts. <strong>Run Tick</strong> is the manual version — it evaluates one symbol and reports what it sees without trading.</p>
+    `,
+  },
+  {
+    title: "Phone alerts & staying safe",
+    body: `
+      <p><strong>Get pushed when something real happens:</strong> install the free <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> app, subscribe to a long random topic name (it acts like a password), and paste that topic into <strong>Settings &rarr; Phone notifications</strong>. Saving sends a test push immediately. You'll then get alerts for every trade opened, every exit with its realized P&amp;L, and any walk-away — nothing noisier.</p>
+      <p><strong>Two protections worth knowing:</strong></p>
       <ul>
-        <li><strong>Run Tick</strong> checks one symbol (set by <code>BOT_SYMBOL</code> in <code>.env</code>) and just reports what it sees — nothing gets submitted automatically.</li>
-        <li><strong>Auto-Trading</strong> is the real automation: while it's on, the app scans the stock universe every couple of minutes on its own, and for any genuine buy signal, submits a bracket order (stop-loss and take-profit included) without you clicking anything. It's off by default — you turn it on explicitly.</li>
+        <li><strong>Live trading</strong> can only be armed by turning paper mode off <em>and</em> checking "Allow live trading" <em>and</em> confirming a warning dialog — and the Status panel then shows a red <strong>LIVE — REAL MONEY</strong> so there's never doubt about which world the money is in</li>
+        <li><strong>Dashboard Login</strong> (Settings) puts a username/password on this whole dashboard — strongly recommended if it's reachable from outside your machine</li>
       </ul>
-      <p>Safety limits — max daily loss, max trades per day, max position value — apply to every trade Auto-Trading places, exactly like a manual order. And it can only ever place <strong>real</strong>-money trades if you've explicitly turned off paper mode <em>and</em> checked "Allow live trading" in Settings — otherwise every trade, automated or not, stays paper.</p>
     `,
   },
 ];
