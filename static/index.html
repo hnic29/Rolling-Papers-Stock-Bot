@@ -549,21 +549,19 @@
       <section id="backtest-view" class="view">
         <article class="panel">
           <h2>Backtest Sandbox</h2>
-          <p>Replays the real pullback strategy against actual historical minute-by-minute price data from Alpaca — no real or paper orders are placed, nothing here touches your live account, positions, or trade history.</p>
+          <p>Pick any past trading day and replay it exactly the way live auto-trading would have run it: scans your real universe, scores every symbol against the same five pillars, and walks actual historical minute-by-minute data for anything that qualifies — same entry pattern, same stop-loss, same no-fixed-take-profit exit logic. No real or paper orders are placed; nothing here touches your live account, positions, or trade history.</p>
           <p class="chart-hint">
-            Two honest limits: historical news and float-share data aren't available, so those two of the five stock-selection
-            criteria never score here (a live scan may flag a stock this backtest wouldn't). And Alpaca's free data feed
-            typically only goes back to around 2020 — "past years" means whatever's actually available, not decades of history.
-            Each run is capped at a 2-year range to keep it running in a reasonable time.
+            Honest limits: historical news isn't available, so that one of the five stock-selection pillars never scores
+            here (a live scan may flag a stock this backtest wouldn't). Float/sector come from your local metadata list,
+            not a historical snapshot. And Alpaca's free data feed typically only goes back to around 2020.
           </p>
         </article>
 
         <article class="panel">
           <h2>Run a Backtest</h2>
           <form id="backtest-form">
-            <label>Symbol <input name="symbol" value="AAPL" /></label>
-            <label>Start date <input name="start" type="date" required /></label>
-            <label>End date <input name="end" type="date" required /></label>
+            <label>Date <input name="day" type="date" required /></label>
+            <label>Symbols (optional) <input name="symbols" placeholder="leave blank to use the live universe" /></label>
             <label>Starting capital <input name="starting_capital" type="number" min="100" step="100" value="10000" /></label>
             <label>Position size ($) <input name="position_value" type="number" min="10" step="10" value="1000" /></label>
             <button type="submit" id="run-backtest">Run Backtest</button>
@@ -580,8 +578,8 @@
             <div><span>Win Rate</span><strong id="bt-winrate">-</strong></div>
             <div><span>Best Trade</span><strong id="bt-best">-</strong></div>
             <div><span>Worst Trade</span><strong id="bt-worst">-</strong></div>
-            <div><span>Days Scanned</span><strong id="bt-scanned">-</strong></div>
-            <div><span>Days Qualified</span><strong id="bt-qualified">-</strong></div>
+            <div><span>Symbols Scanned</span><strong id="bt-scanned">-</strong></div>
+            <div><span>Symbols Qualified</span><strong id="bt-qualified">-</strong></div>
           </div>
           <div class="chart-wrap">
             <canvas id="backtest-chart" width="1040" height="240"></canvas>
@@ -590,6 +588,7 @@
             <table>
               <thead>
                 <tr>
+                  <th>Symbol</th>
                   <th>Entry Time</th>
                   <th>Entry Price</th>
                   <th>Exit Time</th>
@@ -601,8 +600,26 @@
                 </tr>
               </thead>
               <tbody id="backtest-trades">
-                <tr><td colspan="8">No trades yet — run a backtest above.</td></tr>
+                <tr><td colspan="9">No trades yet — run a backtest above.</td></tr>
               </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel" id="backtest-candidates-panel" hidden>
+          <h2>Candidates Scanned</h2>
+          <p class="chart-hint">Every symbol looked at that day, ranked by score — 4 or 5 of 5 qualified for the entry check; anything lower was never evaluated further.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Score</th>
+                  <th>Qualified</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody id="backtest-candidates"></tbody>
             </table>
           </div>
         </article>

@@ -28,7 +28,7 @@ from app.models import (
 )
 from app.paths import resource_path
 from app.services import bankroll, notify, trade_log, trade_sync
-from app.services.backtest import run_backtest
+from app.services.backtest import run_daily_backtest
 from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
 from app.services.env_file import InvalidEnvValue, mask_secret, read_env, write_env
@@ -456,10 +456,9 @@ def trade(request: TradeRequest):
 @app.post("/api/backtest")
 def backtest(request: BacktestRequest):
     try:
-        return run_backtest(
-            request.symbol,
-            request.start,
-            request.end,
+        return run_daily_backtest(
+            request.day,
+            symbols=request.symbols,
             starting_capital=request.starting_capital,
             position_value=request.position_value,
         )

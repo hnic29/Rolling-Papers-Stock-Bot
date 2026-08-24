@@ -1171,7 +1171,7 @@ function renderBacktestChart(points) {
   if (points.length < 2) {
     ctx.fillStyle = "#a8b9c8";
     ctx.font = "14px Segoe UI, sans-serif";
-    ctx.fillText("No simulated trades in this range", padding.left, height / 2);
+    ctx.fillText("No simulated trades that day", padding.left, height / 2);
     return;
   }
 
@@ -1222,13 +1222,14 @@ function renderBacktestChart(points) {
 function renderBacktestTrades(trades) {
   const body = document.querySelector("#backtest-trades");
   if (!trades.length) {
-    body.innerHTML = `<tr><td colspan="8">No simulated trades in this range.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9">No simulated trades that day.</td></tr>`;
     return;
   }
   body.innerHTML = trades.map((trade) => {
     const pnlClass = trade.pnl >= 0 ? "up" : "down";
     return `
     <tr>
+      <td>${escapeHtml(trade.symbol)}</td>
       <td>${new Date(trade.entry_time).toLocaleString()}</td>
       <td>$${Number(trade.entry_price).toFixed(2)}</td>
       <td>${new Date(trade.exit_time).toLocaleString()}</td>
@@ -1240,6 +1241,19 @@ function renderBacktestTrades(trades) {
     </tr>
   `;
   }).join("");
+}
+
+function renderBacktestCandidates(candidates) {
+  document.querySelector("#backtest-candidates-panel").hidden = !candidates.length;
+  const body = document.querySelector("#backtest-candidates");
+  body.innerHTML = candidates.map((candidate) => `
+    <tr>
+      <td>${escapeHtml(candidate.symbol)}</td>
+      <td>${candidate.score}/5</td>
+      <td class="${candidate.qualified ? "up" : "down"}">${candidate.qualified ? "Yes" : "No"}</td>
+      <td>${candidate.reasons.map(escapeHtml).join("; ")}</td>
+    </tr>
+  `).join("");
 }
 
 function renderBacktestResult(result) {
@@ -1262,11 +1276,12 @@ function renderBacktestResult(result) {
   worstEl.textContent = `${result.worst_trade_pct >= 0 ? "+" : ""}${Number(result.worst_trade_pct).toFixed(2)}%`;
   worstEl.className = result.worst_trade_pct >= 0 ? "up" : "down";
 
-  document.querySelector("#bt-scanned").textContent = result.days_scanned;
-  document.querySelector("#bt-qualified").textContent = result.days_qualified;
+  document.querySelector("#bt-scanned").textContent = result.symbols_scanned;
+  document.querySelector("#bt-qualified").textContent = result.symbols_qualified;
 
   renderBacktestChart(result.equity_curve);
   renderBacktestTrades(result.trades);
+  renderBacktestCandidates(result.candidates);
 }
 
 async function runBacktest(payload) {
@@ -1665,18 +1680,20 @@ document.querySelector("#backtest-form").addEventListener("submit", async (event
   const form = new FormData(event.currentTarget);
   const statusEl = document.querySelector("#backtest-status");
   const submitBtn = document.querySelector("#run-backtest");
-  statusEl.textContent = "Running backtest — this can take a little while for longer ranges...";
+  const symbolsText = (form.get("symbols") || "").trim();
+  statusEl.textContent = symbolsText
+    ? "Running backtest..."
+    : "Running backtest against your live universe — this scans every symbol in it...";
   submitBtn.disabled = true;
   try {
     const result = await runBacktest({
-      symbol: form.get("symbol"),
-      start: form.get("start"),
-      end: form.get("end"),
+      day: form.get("day"),
+      symbols: symbolsText ? symbolsText.split(",").map((s) => s.trim()).filter(Boolean) : null,
       starting_capital: Number(form.get("starting_capital")),
       position_value: Number(form.get("position_value")),
     });
     renderBacktestResult(result);
-    statusEl.textContent = `Done — scanned ${result.days_scanned} trading days, ${result.days_qualified} met the stock-selection gate.`;
+    statusEl.textContent = `Done — scanned ${result.symbols_scanned} symbols, ${result.symbols_qualified} qualified, ${result.symbols_traded} traded.`;
   } catch (error) {
     statusEl.textContent = error.message;
   } finally {

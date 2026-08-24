@@ -195,7 +195,7 @@ def test_backtest_runs_end_to_end_over_http(monkeypatch):
         minute_bar(13, 31, 9.05, 10.5, 9.0, 10.4, 80_000),
         minute_bar(13, 32, 10.4, 10.45, 10.0, 10.05, 40_000),
         minute_bar(13, 33, 10.05, 10.6, 10.05, 10.55, 60_000),
-        minute_bar(13, 34, 10.55, 10.65, 10.5, 10.6, 50_000),
+        minute_bar(13, 34, 10.55, 10.65, 10.5, 10.4, 50_000),  # red candle -> exit_signal
     ]
 
     monkeypatch.setattr(AlpacaBroker, "__init__", lambda self: None)
@@ -203,15 +203,14 @@ def test_backtest_runs_end_to_end_over_http(monkeypatch):
     monkeypatch.setattr(
         AlpacaBroker,
         "historical_bars",
-        lambda self, symbol, start, end, limit=120, sort=None, timeframe=None: minute_bars,
+        lambda self, symbol, start, end, limit=390, sort=None, timeframe=None: minute_bars,
     )
 
     response = client.post(
         "/api/backtest",
         json={
-            "symbol": "AAPL",
-            "start": prev_day.isoformat(),
-            "end": test_day.isoformat(),
+            "day": test_day.isoformat(),
+            "symbols": ["AAPL"],
             "starting_capital": 10000,
             "position_value": 1000,
         },
@@ -220,7 +219,9 @@ def test_backtest_runs_end_to_end_over_http(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["trade_count"] == 1
-    assert body["trades"][0]["exit_reason"] == "target"
+    assert body["trades"][0]["exit_reason"] == "exit_signal"
+    assert body["symbols_scanned"] == 1
+    assert body["symbols_qualified"] == 1
 
 
 def test_sync_records_the_exit_leg_of_a_filled_bracket_trade(monkeypatch, tmp_path):

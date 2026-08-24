@@ -174,8 +174,9 @@ class BankrollReturnRequest(BaseModel):
 
 
 class BacktestRequest(BaseModel):
-    symbol: str
-    start: date
-    end: date
+    day: date
+    # None/empty = use the real live universe (data/stock_universe.txt) - this is what
+    # makes it "run THIS strategy" rather than a hypothetical one-off symbol test.
+    symbols: list[str] | None = None
     starting_capital: float = 10000.0
     position_value: float = 1000.0
