@@ -156,6 +156,16 @@ def get_settings():
 
 @app.post("/api/settings", response_model=AppSettingsResponse)
 def save_settings(request: AppSettingsUpdate):
+    arming_live = not request.alpaca_paper and request.allow_live_trading
+    if arming_live and not request.confirm_live_trading:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This would enable LIVE trading with real money — the bot could place real "
+                "orders within a couple of minutes. Confirm explicitly to proceed."
+            ),
+        )
+
     updates = {
         "ALPACA_PAPER": str(request.alpaca_paper).lower(),
         "ALLOW_LIVE_TRADING": str(request.allow_live_trading).lower(),

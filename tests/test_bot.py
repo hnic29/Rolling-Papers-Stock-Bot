@@ -725,6 +725,21 @@ def test_stopping_auto_trading_persists_across_a_restart_too(tmp_path, monkeypat
     assert second.status.auto_trading_enabled is False
 
 
+def test_refresh_status_reflects_a_runtime_paper_mode_change(tmp_path, monkeypatch):
+    """Settings saves take effect without a restart, but status.paper was only set at
+    construction - so after switching to live mode the dashboard's Mode field kept
+    saying "Paper" while real-money orders could already be going out."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    bot = TradingBot()
+    assert bot.status.paper is True
+
+    monkeypatch.setattr("app.services.bot.settings.alpaca_paper", False)
+    bot.refresh_status()
+
+    assert bot.status.paper is False
+
+
 def test_running_flag_also_survives_a_restart(tmp_path, monkeypatch):
     """Cosmetic, not safety-critical (nothing gates on this flag), but the Start/Stop
     button shouldn't lie about whether the bot is actually running after a restart."""

@@ -424,7 +424,7 @@
             <label>Alpaca Secret Key <input name="alpaca_secret_key" type="password" autocomplete="off" /></label>
             <label>FMP API Key <input name="fmp_api_key" type="password" autocomplete="off" placeholder="e.g. a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" title="Paste just the key itself — a plain alphanumeric string from your FMP dashboard, e.g. a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6. Don't include a leading 'apikey:' label, quotes, or 'Bearer' prefix." /></label>
             <label class="check-row"><input name="alpaca_paper" type="checkbox" checked /> Alpaca paper trading</label>
-            <label class="check-row"><input name="allow_live_trading" type="checkbox" /> Allow live trading</label>
+            <label class="check-row live-trading-row"><input name="allow_live_trading" type="checkbox" /> Allow live trading <span class="live-trading-warning">real money — only takes effect with paper mode off, and asks for confirmation</span></label>
             <button type="submit">Save Settings</button>
             <button type="button" id="test-connection">Test Connection</button>
           </form>

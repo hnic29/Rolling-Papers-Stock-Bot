@@ -994,6 +994,18 @@ td {
   color: #ff9b9b;
 }
 
+.live-mode {
+  animation: livePulse 1.2s ease-in-out infinite;
+  color: #ff9b9b;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.live-trading-warning {
+  color: #ff9b9b;
+  font-size: 11.5px;
+}
+
 @media (max-width: 760px) {
   .topbar,
   .grid,

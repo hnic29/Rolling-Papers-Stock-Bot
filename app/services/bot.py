@@ -82,6 +82,12 @@ class TradingBot:
             pass  # persistence is a nice-to-have across restarts, never worth crashing a live cycle over
 
     def refresh_status(self) -> BotStatus:
+        # Settings can flip paper/live at runtime (the Settings page save takes effect
+        # on the next request - no restart) and this was only set at construction, so
+        # the dashboard's Mode field kept saying "Paper" after switching to live: the
+        # one field that must never lie about which world the money is in.
+        self.status.paper = settings.alpaca_paper
+
         today = current_trading_day()
         if today != self._trading_day:
             self._trading_day = today

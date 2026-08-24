@@ -129,6 +129,10 @@ class AppSettingsUpdate(BaseModel):
     alpaca_paper: bool = True
     fmp_api_key: str = ""
     allow_live_trading: bool = False
+    # Must be explicitly true on any save that arms live trading (alpaca_paper off AND
+    # allow_live_trading on) - deliberate server-side friction so neither two mis-clicked
+    # checkboxes nor a bare API call can put real money in play silently.
+    confirm_live_trading: bool = False
 
 
 class DashboardAuthUpdate(BaseModel):

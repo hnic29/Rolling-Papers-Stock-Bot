@@ -332,3 +332,58 @@ def test_settings_post_rejects_a_newline_smuggled_config_injection(monkeypatch, 
     assert response.status_code == 400
     saved = fake_env.read_text(encoding="utf-8")
     assert saved == "EXISTING=untouched\n"  # file untouched - no partial/injected write
+
+
+def _live_settings_payload(confirm=None):
+    payload = {
+        "alpaca_api_key": "",
+        "alpaca_secret_key": "",
+        "alpaca_paper": False,
+        "fmp_api_key": "",
+        "allow_live_trading": True,
+    }
+    if confirm is not None:
+        payload["confirm_live_trading"] = confirm
+    return payload
+
+
+def test_settings_post_refuses_to_arm_live_trading_without_explicit_confirmation(monkeypatch, tmp_path):
+    """Two mis-clicked checkboxes (or a bare API call) must never be enough to put real
+    money in play - arming live trading requires an explicit confirmation flag."""
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("", encoding="utf-8")
+    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+
+    response = client.post("/api/settings", json=_live_settings_payload())
+
+    assert response.status_code == 400
+    assert "LIVE" in response.json()["detail"]
+    assert fake_env.read_text(encoding="utf-8") == ""  # nothing written
+
+
+def test_settings_post_arms_live_trading_with_explicit_confirmation(monkeypatch, tmp_path):
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("", encoding="utf-8")
+    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+
+    response = client.post("/api/settings", json=_live_settings_payload(confirm=True))
+
+    assert response.status_code == 200
+    saved = fake_env.read_text(encoding="utf-8")
+    assert "ALPACA_PAPER=false" in saved
+    assert "ALLOW_LIVE_TRADING=true" in saved
+
+
+def test_settings_post_needs_no_confirmation_while_staying_paper(monkeypatch, tmp_path):
+    """The allow flag alone (paper still on) doesn't arm anything - the broker gate
+    needs BOTH - so it shouldn't demand the scary confirmation either."""
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("", encoding="utf-8")
+    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+
+    payload = _live_settings_payload()
+    payload["alpaca_paper"] = True
+
+    response = client.post("/api/settings", json=payload)
+
+    assert response.status_code == 200

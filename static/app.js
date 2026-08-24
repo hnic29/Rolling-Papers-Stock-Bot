@@ -218,7 +218,9 @@ function updateMarketClock() {
 
 function render(status) {
   document.querySelector("#message").textContent = status.last_message;
-  document.querySelector("#mode").textContent = status.paper ? "Paper" : "Live";
+  const modeEl = document.querySelector("#mode");
+  modeEl.textContent = status.paper ? "Paper" : "LIVE — REAL MONEY";
+  modeEl.className = status.paper ? "" : "live-mode";
   document.querySelector("#running").textContent = status.running ? "Yes" : "No";
   const startBtn = document.querySelector("#start");
   startBtn.setAttribute("aria-pressed", String(Boolean(status.running)));
@@ -1402,6 +1404,23 @@ document.querySelectorAll(".tab").forEach((tab) => {
 document.querySelector("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+
+  // Arming live trading (paper off + allow on) moves REAL money - make it impossible
+  // to do by accident. The server independently rejects the save without this flag.
+  const armingLive = !form.alpaca_paper.checked && form.allow_live_trading.checked;
+  let confirmLive = false;
+  if (armingLive) {
+    confirmLive = window.confirm(
+      "⚠️ You are about to enable LIVE trading with REAL money.\n\n" +
+        "Paper mode will be OFF. If auto-trading is running, the bot could place real-money " +
+        "orders within a couple of minutes of saving.\n\nAre you absolutely sure?"
+    );
+    if (!confirmLive) {
+      document.querySelector("#message").textContent = "Live trading NOT enabled — settings unchanged.";
+      return;
+    }
+  }
+
   const submitButton = form.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
   try {
@@ -1413,6 +1432,7 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
         fmp_api_key: form.fmp_api_key.value,
         alpaca_paper: form.alpaca_paper.checked,
         allow_live_trading: form.allow_live_trading.checked,
+        confirm_live_trading: confirmLive,
       }),
     });
     form.alpaca_api_key.value = settings.alpaca_api_key;
