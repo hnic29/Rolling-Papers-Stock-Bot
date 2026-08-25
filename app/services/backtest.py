@@ -6,7 +6,7 @@ from alpaca.common.enums import Sort
 from app.brokers.alpaca_broker import AlpacaBroker
 from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StockCandidate
-from app.services.fmp import FmpClient
+from app.services import float_lookup
 from app.services.live_setup import compute_ema, compute_macd, compute_vwap
 from app.services.scanner import AVG_VOLUME_WINDOW, MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
@@ -25,10 +25,11 @@ def _float_and_sector(symbol: str, metadata: dict) -> tuple[int | None, str | No
     """Float share count and sector for one symbol. Checks the local, already-curated
     metadata list FIRST (data/symbol_metadata.csv - free, instant, and accurate for
     anything in the real universe, since scripts/backfill_float_data.py keeps it that
-    way) and only falls back to a live FMP lookup for a symbol that isn't in it - e.g.
-    a custom one-off symbol typed into the backtest form. Share structure and sector
-    change rarely enough that today's value is a reasonable stand-in for the whole day
-    being tested - unlike news, which is genuinely day-specific and isn't sourced here."""
+    way) and only falls back to a live lookup (FMP -> Yahoo, see float_lookup) for a
+    symbol that isn't in it - e.g. a custom one-off symbol typed into the backtest
+    form. Share structure and sector change rarely enough that today's value is a
+    reasonable stand-in for the whole day being tested - unlike news, which is
+    genuinely day-specific and isn't sourced here."""
     symbol = symbol.upper()
     row = metadata.get(symbol, {})
     float_shares = row.get("float_shares")
@@ -36,14 +37,7 @@ def _float_and_sector(symbol: str, metadata: dict) -> tuple[int | None, str | No
     if float_shares is not None:
         return float_shares, sector
 
-    try:
-        payload = FmpClient().shares_float(symbol)
-    except Exception:
-        payload = None
-    if payload:
-        raw = payload.get("floatShares") or payload.get("float_shares")
-        float_shares = int(raw) if raw else None
-    return float_shares, sector
+    return float_lookup.float_shares(symbol), sector
 
 
 def _daily_candidate(broker: AlpacaBroker, symbol: str, day: date, metadata: dict) -> StockCandidate | None:

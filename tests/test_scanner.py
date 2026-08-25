@@ -167,31 +167,33 @@ def test_scan_universe_merges_live_gainers_with_the_static_list(monkeypatch):
     assert response.scanned_count == 3
 
 
-def test_fmp_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(monkeypatch):
+def test_live_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(monkeypatch):
     monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
     # Barely moves, ordinary volume - fails relative volume, total volume, and percent change.
     bars = {"COLD": [_bar(10.0, 500_000) for _ in range(20)] + [_bar(10.05, 500_000)]}
+    lookup = MagicMock(return_value=1_000_000)
+    monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lookup)
 
     scanner = MarketScanner()
-    scanner.fmp.shares_float = MagicMock(return_value={"float_shares": 1_000_000})
     with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
         scanner.scan(["COLD"])
 
-    scanner.fmp.shares_float.assert_not_called()
+    lookup.assert_not_called()
 
 
-def test_fmp_float_lookup_runs_for_a_symbol_clearing_the_cheap_pillars(monkeypatch):
+def test_live_float_lookup_runs_for_a_symbol_clearing_the_cheap_pillars(monkeypatch):
     monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
     # 15% move, 6x relative volume, well over 1M shares, price in range - clears everything
     # except float, which is exactly the case float should be spent checking.
     bars = {"HOTT": [_bar(10.0, 1_000_000) for _ in range(20)] + [_bar(11.5, 6_000_000)]}
+    lookup = MagicMock(return_value=5_000_000)
+    monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lookup)
 
     scanner = MarketScanner()
-    scanner.fmp.shares_float = MagicMock(return_value={"float_shares": 5_000_000})
     with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
         response = scanner.scan(["HOTT"])
 
-    scanner.fmp.shares_float.assert_called_once_with("HOTT")
+    lookup.assert_called_once_with("HOTT")
     assert response.results[0].float_shares == 5_000_000
     assert response.results[0].score == 5
 

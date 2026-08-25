@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import ScannerResponse, ScannerResult, Signal, StockCandidate
 from app.paths import resource_path
-from app.services.fmp import FmpClient
+from app.services import float_lookup
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -48,7 +48,6 @@ class MarketScanner:
         self.strategy = SmallAccountPullbackStrategy()
         self.universe_path = resource_path("data/stock_universe.txt")
         self.metadata_path = resource_path("data/symbol_metadata.csv")
-        self.fmp = FmpClient()
 
     def scan(self, symbols: list[str]) -> ScannerResponse:
         clean_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
@@ -93,11 +92,11 @@ class MarketScanner:
             latest_news = news.get(symbol)
             sector = symbol_metadata.get("sector")
 
-            # FMP's float-share quota is small and shared across every symbol this scanner
-            # ever looks at - spending it on a symbol that's already failing the cheap,
-            # locally-computable pillars wastes it on something that can't qualify anyway.
-            # Only look up float once a symbol already clears enough of the rest to make
-            # float the deciding pillar.
+            # Live float lookups (FMP -> Yahoo fallback, see float_lookup) are slow and
+            # FMP's share of them is quota-limited - spending one on a symbol that's
+            # already failing the cheap, locally-computable pillars wastes it on
+            # something that can't qualify anyway. Only look up float once a symbol
+            # already clears enough of the rest to make float the deciding pillar.
             cheap_pillars = sum([
                 relative_volume is not None and relative_volume >= self.strategy.min_relative_volume,
                 total_volume >= self.strategy.min_total_volume,
@@ -105,8 +104,7 @@ class MarketScanner:
                 self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price,
             ])
             if cheap_pillars >= 3:
-                fmp_float = self._safe_float(symbol)
-                float_shares = fmp_float.get("float_shares") if fmp_float else symbol_metadata.get("float_shares")
+                float_shares = float_lookup.float_shares(symbol) or symbol_metadata.get("float_shares")
             else:
                 float_shares = symbol_metadata.get("float_shares")
             candidate = StockCandidate(
@@ -260,19 +258,3 @@ class MarketScanner:
                     news_by_symbol[symbol] = {"headline": headline, "url": url}
         return news_by_symbol
 
-    def _safe_float(self, symbol: str) -> dict | None:
-        try:
-            payload = self.fmp.shares_float(symbol)
-        except Exception:
-            return None
-        if not payload:
-            return None
-
-        float_value = payload.get("floatShares") or payload.get("float_shares")
-        outstanding = payload.get("outstandingShares") or payload.get("outstanding_shares")
-        return {
-            "float_shares": int(float_value) if float_value else None,
-            "outstanding_shares": int(outstanding) if outstanding else None,
-            "source": payload.get("source"),
-            "date": payload.get("date"),
-        }
