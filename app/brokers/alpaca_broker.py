@@ -1,6 +1,9 @@
+import re
+
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.enums import AssetClass, AssetStatus, OrderClass, OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import (
+    GetAssetsRequest,
     GetOrdersRequest,
     GetPortfolioHistoryRequest,
     MarketOrderRequest,
@@ -66,6 +69,20 @@ class AlpacaBroker:
             {"symbol": g.symbol, "percent_change": float(g.percent_change), "price": float(g.price)}
             for g in movers.gainers
         ]
+
+    def all_tradable_symbols(self) -> list[str]:
+        """Every active, tradable common-stock symbol on NASDAQ/NYSE/AMEX (~8,000+) -
+        the raw input for the scanner's whole-market sweep. Plain 1-5 letter symbols
+        only; OTC and derivative-suffixed listings are excluded."""
+        request = GetAssetsRequest(asset_class=AssetClass.US_EQUITY, status=AssetStatus.ACTIVE)
+        assets = self.client.get_all_assets(request)
+        return sorted({
+            asset.symbol
+            for asset in assets
+            if asset.tradable
+            and asset.exchange.value in ("NASDAQ", "NYSE", "AMEX")
+            and re.fullmatch(r"[A-Z]{1,5}", asset.symbol)
+        })
 
     def daily_pnl(self) -> float:
         account = self.account()

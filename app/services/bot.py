@@ -428,7 +428,12 @@ class TradingBot:
         self.status.last_message = (
             "Auto-trading: " + "; ".join(parts)
             if parts
-            else f"Auto-trading scanned {scanned_count} symbols — no qualifying buy signals"
+            else (
+                f"Auto-trading swept {scan_response.swept_count:,} symbols market-wide, "
+                f"evaluated {scanned_count} candidates — no qualifying buy signals"
+                if scan_response.swept_count
+                else f"Auto-trading scanned {scanned_count} symbols — no qualifying buy signals"
+            )
         )
 
         # Nothing re-runs build_universe.py on its own - without this, stale float/price/

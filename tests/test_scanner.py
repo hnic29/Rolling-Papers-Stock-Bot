@@ -145,12 +145,14 @@ def test_todays_gainers_is_empty_when_the_screener_fails():
         assert scanner.todays_gainers() == set()
 
 
-def test_scan_universe_merges_live_gainers_with_the_static_list(monkeypatch):
+def test_scan_universe_merges_sweep_gainers_and_the_static_list(monkeypatch):
     """The static watchlist alone can't catch a day-of runner (XPON, JUNS - both real
-    missed trades) - every scan must also cover today's live top gainers."""
+    missed trades) - every scan must also cover the whole-market sweep and today's
+    live top gainers."""
     scanner = MarketScanner()
     monkeypatch.setattr(scanner, "load_universe", lambda: ["ACHR", "BYND"])
-    monkeypatch.setattr(scanner, "todays_gainers", lambda: {"XPON", "BYND"})
+    monkeypatch.setattr(scanner, "todays_gainers", lambda: {"PMI", "BYND"})
+    monkeypatch.setattr(scanner, "full_market_sweep", lambda: ({"XPON"}, 8_253))
 
     scanned = {}
 
@@ -163,8 +165,90 @@ def test_scan_universe_merges_live_gainers_with_the_static_list(monkeypatch):
 
     response = scanner.scan_universe()
 
-    assert scanned["symbols"] == ["ACHR", "BYND", "XPON"]  # merged, deduped, sorted
-    assert response.scanned_count == 3
+    assert scanned["symbols"] == ["ACHR", "BYND", "PMI", "XPON"]  # merged, deduped, sorted
+    assert response.scanned_count == 4
+    assert response.swept_count == 8_253
+
+
+def _sweep_bar(close, volume):
+    return SimpleNamespace(close=close, volume=volume)
+
+
+def test_full_market_sweep_finds_a_qualifying_mover_across_the_whole_market(monkeypatch):
+    """The Ross-style scanner: a symbol on NO list anywhere must still be found the
+    moment its real numbers fit the profile. RUNR clears all four bar-math pillars;
+    the others each fail exactly one (or are a derivative listing)."""
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
+
+    quiet_history = [_sweep_bar(5.0, 400_000) for _ in range(20)]
+    bars_by_symbol = {
+        "RUNR": quiet_history + [_sweep_bar(6.0, 5_000_000)],  # +20%, 12.5x relvol, 5M shares
+        "FLAT": quiet_history + [_sweep_bar(5.1, 5_000_000)],  # only +2% - fails the move
+        "THIN": quiet_history + [_sweep_bar(6.0, 900_000)],  # fails total volume
+        "RICH": [_sweep_bar(50.0, 400_000)] * 20 + [_sweep_bar(60.0, 5_000_000)],  # out of price range
+        "SLOWW": [_sweep_bar(5.0, 4_000_000)] * 20 + [_sweep_bar(6.0, 5_000_000)],  # only 1.25x relvol
+        "ABCDW": quiet_history + [_sweep_bar(6.0, 5_000_000)],  # warrant suffix
+    }
+
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: sorted(bars_by_symbol))
+
+    broker = MagicMock()
+    broker.daily_bars.side_effect = lambda symbols, start, end: SimpleNamespace(
+        data={s: bars_by_symbol[s] for s in symbols}
+    )
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        hits, swept = scanner.full_market_sweep()
+
+    assert hits == {"RUNR"}
+    assert swept == 6
+
+
+def test_full_market_sweep_survives_a_failed_chunk(monkeypatch):
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: ["AAAA", "BBBB"])
+
+    broker = MagicMock()
+    broker.daily_bars.side_effect = Exception("one chunk timed out")
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        hits, swept = scanner.full_market_sweep()
+
+    assert hits == set()
+    assert swept == 0
+
+
+def test_tradable_symbols_are_cached_for_the_day(monkeypatch):
+    from app.services import scanner as scanner_module
+
+    monkeypatch.setattr(scanner_module, "_tradable_symbols_cache", {"date": None, "symbols": []})
+    broker = MagicMock()
+    broker.all_tradable_symbols.return_value = ["AAAA", "BBBB"]
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        assert scanner._tradable_symbols() == ["AAAA", "BBBB"]
+        assert scanner._tradable_symbols() == ["AAAA", "BBBB"]  # served from the day cache
+
+    broker.all_tradable_symbols.assert_called_once()
+
+
+def test_tradable_symbols_fall_back_to_the_stale_cache_on_failure(monkeypatch):
+    from datetime import date
+
+    from app.services import scanner as scanner_module
+
+    monkeypatch.setattr(
+        scanner_module,
+        "_tradable_symbols_cache",
+        {"date": date(2020, 1, 1), "symbols": ["STALE"]},  # yesterday's list
+    )
+    broker = MagicMock()
+    broker.all_tradable_symbols.side_effect = Exception("asset endpoint down")
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        assert scanner._tradable_symbols() == ["STALE"]  # stale beats nothing mid-day
 
 
 def test_live_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(monkeypatch):

@@ -392,10 +392,11 @@
 
         <article class="panel strategy-panel" id="strategy-universe">
           <h2>The Universe — What Stocks It Even Looks At</h2>
-          <p>Every scan cycle draws candidates from <strong>two sources</strong> and merges them:</p>
+          <p>Every scan cycle draws candidates from <strong>three sources</strong> and merges them:</p>
           <ul class="strategy-check-list">
-            <li><strong>Today's live top gainers</strong> — Alpaca's whole-market movers screener, pulled fresh every cycle and filtered to common shares (no warrants/units/rights) in the $2–$20 range that are already up 10%+. This is what catches a day-of runner: the exact stocks this strategy exists for usually appear on no watchlist the night before — they become visible the day they move.</li>
-            <li><strong>A screened watchlist</strong> (<code>data/stock_universe.txt</code>) — built by live-screening every tradable NASDAQ/NYSE/AMEX stock (<code>scripts/build_universe.py</code>) for price $2–$20, float &le; 20,000,000 shares, and a minimal liquidity floor (&ge; 50,000 shares/day average, just to exclude dead tickers).</li>
+            <li><strong>A true whole-market sweep</strong> — every tradable NASDAQ/NYSE/AMEX common stock (~8,000+, refreshed daily) screened each cycle against the actual pillar math: price $2–$20, up 10%+, 1M+ shares traded, 5x relative volume. Nothing needs to be on any list in advance to be found — this is the Ross-style scanner, and it runs in ~15 seconds per cycle.</li>
+            <li><strong>Today's live top gainers</strong> — Alpaca's movers screener as a fast secondary net (and the fallback if a sweep fails mid-cycle), filtered the same way.</li>
+            <li><strong>A screened watchlist</strong> (<code>data/stock_universe.txt</code>) — pre-screened small-floats worth watching even on days they haven't yet moved enough to surface in the sweep.</li>
           </ul>
           <p>
             The float ceiling matters most: a stock with billions of shares outstanding (think AAPL or TSLA)

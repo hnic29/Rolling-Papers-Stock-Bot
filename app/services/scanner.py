@@ -27,6 +27,16 @@ _COMMON_STOCK_SYMBOL = re.compile(r"[A-Z]{1,5}")
 # +300% warrants at $0.01 that would just waste scan slots).
 _DERIVATIVE_SUFFIXES = "WUR"
 
+# Whole-market sweep settings. ~8,200 tradable symbols / 300 per batched daily-bars
+# request = ~28 requests per sweep - comfortably inside Alpaca's free-tier rate limit
+# (200/min) even on a 2-minute cycle.
+SWEEP_CHUNK_SIZE = 300
+SWEEP_MAX_HITS = 25  # hits get the full (quotes/news/float) scan - keep that bounded
+# The tradable-symbol list barely changes intraday; refetching ~14K assets every
+# 2-minute cycle would be pure waste. Cached per calendar day, module-level so the
+# manual Auto Scan button and the automation loop share it.
+_tradable_symbols_cache: dict = {"date": None, "symbols": []}
+
 
 def _session_progress_fraction(now: datetime) -> float:
     """How far into today's regular session `now` falls, as a fraction of a full trading
@@ -149,17 +159,95 @@ class MarketScanner:
         return ScannerResponse(results=results, scanned_count=len(clean_symbols))
 
     def scan_universe(self, limit: int = 25, max_symbols: int = 250) -> ScannerResponse:
-        """The static universe list PLUS today's live top gainers. The static list alone
-        structurally cannot catch a day-of runner: it's screened days in advance, and the
-        exact stocks this strategy exists for (XPON +80% on 933K float, JUNS +60% gap on
-        478K float - both real missed trades) only become visible the day they move.
-        Merging Alpaca's market-movers screener into every scan closes that gap; the five
-        pillars then filter the junk the same way they filter everything else."""
+        """Three candidate sources, merged every cycle:
+
+        1. A true WHOLE-MARKET sweep - every tradable NASDAQ/NYSE/AMEX common stock
+           (~8,000+), batched through SIP daily bars and screened against the actual
+           pillar math (price, % change, total volume, relative volume). This is the
+           Ross-style scanner: nothing needs to be on any list in advance to be found.
+        2. Alpaca's top-gainers screener - a fast secondary net, and the fallback if
+           a sweep fails mid-cycle.
+        3. The static universe list - pre-screened small-floats worth watching even
+           on days they haven't (yet) moved enough to surface in 1 or 2.
+
+        The full scan (quotes, news, float lookups) then runs only on this merged
+        shortlist - the sweep does its filtering on nothing but bar math, so covering
+        the whole market stays cheap."""
         symbols = self.load_universe()[: max(1, min(max_symbols, 1000))]
-        merged = sorted(set(symbols) | self.todays_gainers())
+        sweep_hits, swept_count = self.full_market_sweep()
+        merged = sorted(set(symbols) | self.todays_gainers() | sweep_hits)
         response = self.scan(merged)
         ranked = response.results[: max(1, min(limit, 100))]
-        return ScannerResponse(results=ranked, scanned_count=response.scanned_count)
+        return ScannerResponse(results=ranked, scanned_count=response.scanned_count, swept_count=swept_count)
+
+    def _tradable_symbols(self) -> list[str]:
+        """All tradable symbols, cached per calendar day - listings barely change
+        intraday and the asset fetch is ~14K rows."""
+        today = datetime.now(UTC).date()
+        if _tradable_symbols_cache["date"] == today and _tradable_symbols_cache["symbols"]:
+            return _tradable_symbols_cache["symbols"]
+        try:
+            symbols = AlpacaBroker().all_tradable_symbols()
+        except Exception:
+            return _tradable_symbols_cache["symbols"]  # stale beats nothing mid-day
+        _tradable_symbols_cache["date"] = today
+        _tradable_symbols_cache["symbols"] = symbols
+        return symbols
+
+    def full_market_sweep(self) -> tuple[set[str], int]:
+        """Screens EVERY tradable symbol against the four locally-computable pillars
+        (price $2-$20, up 10%+, 1M+ shares traded, 5x relative volume) using nothing
+        but batched daily bars - no per-symbol API calls, so the whole market costs
+        ~28 requests. A symbol clearing all four is already a 4-of-5 candidate before
+        float is even looked up, i.e. it qualifies no matter what float says.
+
+        Returns (hit symbols capped at SWEEP_MAX_HITS by biggest move, total symbols
+        swept). Failure-tolerant per chunk: one bad batch skips 300 symbols for one
+        cycle, not the sweep."""
+        symbols = self._tradable_symbols()
+        if not symbols:
+            return set(), 0
+
+        broker = AlpacaBroker()
+        end = datetime.now(UTC) - timedelta(minutes=SIP_RECENCY_BUFFER_MINUTES)
+        start = end - timedelta(days=40)  # ~AVG_VOLUME_WINDOW trading days plus buffer
+        session_progress = _session_progress_fraction(end)
+
+        hits: list[tuple[float, str]] = []
+        swept = 0
+        for i in range(0, len(symbols), SWEEP_CHUNK_SIZE):
+            chunk = symbols[i : i + SWEEP_CHUNK_SIZE]
+            try:
+                bars = broker.daily_bars(chunk, start=start, end=end)
+            except Exception:
+                continue
+            for symbol in chunk:
+                symbol_bars = list(bars.data.get(symbol, []))
+                if len(symbol_bars) < 2:
+                    continue
+                swept += 1
+                latest = symbol_bars[-1]
+                previous = symbol_bars[-2]
+                price = float(latest.close)
+                if not (self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price):
+                    continue
+                previous_close = float(previous.close)
+                percent_change = ((price - previous_close) / previous_close) * 100 if previous_close else 0.0
+                if percent_change < self.strategy.min_percent_change:
+                    continue
+                total_volume = int(latest.volume or 0)
+                if total_volume < self.strategy.min_total_volume:
+                    continue
+                prior_bars = symbol_bars[:-1][-AVG_VOLUME_WINDOW:]
+                avg_volume = (sum(int(bar.volume or 0) for bar in prior_bars) / max(len(prior_bars), 1)) * session_progress
+                if not avg_volume or total_volume / avg_volume < self.strategy.min_relative_volume:
+                    continue
+                if len(symbol) == 5 and symbol[-1] in _DERIVATIVE_SUFFIXES:
+                    continue
+                hits.append((percent_change, symbol))
+
+        hits.sort(reverse=True)
+        return {symbol for _, symbol in hits[:SWEEP_MAX_HITS]}, swept
 
     def todays_gainers(self) -> set[str]:
         """Symbols from Alpaca's live top-gainers screener worth scanning: common shares

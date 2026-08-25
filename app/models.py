@@ -112,9 +112,13 @@ class ScannerResult(BaseModel):
 
 class ScannerResponse(BaseModel):
     results: list[ScannerResult]
-    # How many symbols were actually evaluated (universe + live top-gainers), which
-    # `results` alone can't tell you - scan_universe truncates results to the top N.
+    # How many shortlisted symbols got the full evaluation (universe + top-gainers +
+    # sweep hits), which `results` alone can't tell you - scan_universe truncates
+    # results to the top N.
     scanned_count: int = 0
+    # How many whole-market symbols the sweep screened this cycle (0 = sweep
+    # unavailable/failed, e.g. no asset list yet).
+    swept_count: int = 0
 
 
 class AppSettingsResponse(BaseModel):
