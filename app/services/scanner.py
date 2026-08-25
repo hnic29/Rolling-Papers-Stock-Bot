@@ -1,7 +1,6 @@
 from datetime import UTC, datetime, time as dtime, timedelta
 import csv
 import re
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker

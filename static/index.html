@@ -419,7 +419,7 @@
           <h2>The Five Pillars — Scoring a Candidate</h2>
           <p>Every symbol in the universe gets scanned and scored against five independent checks. A stock needs at least <strong>4 of 5</strong> to be considered a candidate at all — anything less is marked <code>hold</code> and never evaluated further.</p>
           <ol class="strategy-pillar-list">
-            <li><strong>Relative volume &ge; 5x</strong> — today's volume-so-far vs. a same-time-of-day-adjusted average of the last ~80 days. (Comparing partial-day volume against a naive full-day average would understate this all morning — the bot prorates for exactly that reason.)</li>
+            <li><strong>Relative volume &ge; 5x</strong> — today's consolidated volume-so-far vs. a same-time-of-day-adjusted average of the last 20 trading days. (Comparing partial-day volume against a naive full-day average would understate this all morning — the bot prorates for exactly that reason.)</li>
             <li><strong>Total volume &ge; 1,000,000 shares</strong> — enough real activity to actually get filled.</li>
             <li><strong>Up at least 10% on the day</strong> — a real move, not noise.</li>
             <li><strong>Price between $2 and $20</strong> — the "small account" sweet spot; cheap enough to size meaningfully, not so cheap it's a penny-stock trap.</li>
@@ -541,7 +541,7 @@
             <li><strong>Level-two order flow isn't live-wired.</strong> The strategy code supports it (large seller, hidden seller, red-tape burst, buying slowing), but nothing currently feeds it real data — those specific exit signals never fire in practice today. The candle-based exits (topping tail, red close) do the real work.</li>
             <li><strong>Float data is a periodic snapshot</strong> (from Yahoo Finance via <code>scripts/backfill_float_data.py</code>), not a live per-trade lookup — float genuinely doesn't move often, but it can drift.</li>
             <li><strong>The universe list only updates when manually re-run.</strong> The 45-day staleness warning tells you when, but nothing does it automatically yet.</li>
-            <li><strong>Backtesting has real gaps too:</strong> historical news and float data aren't available for past dates, so those two of the five pillars never score in a backtest, and Alpaca's free data feed typically only goes back to around 2020.</li>
+            <li><strong>Backtesting has real gaps too:</strong> historical news isn't available for past dates, so that one of the five pillars never scores in a backtest; float scores from your local metadata list (today's value, not a historical snapshot). And Alpaca's free data feed typically only goes back to around 2020.</li>
           </ul>
         </article>
       </section>

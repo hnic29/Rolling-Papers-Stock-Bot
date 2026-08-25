@@ -99,12 +99,16 @@ def test_scan_queries_past_the_sip_recency_restriction(monkeypatch):
     broker.daily_bars.side_effect = capturing_daily_bars
     broker.latest_news.side_effect = Exception("no news in test")
 
-    before_call = datetime.now(UTC)
     scanner = MarketScanner()
     with patch("app.services.scanner.AlpacaBroker", return_value=broker):
         scanner.scan(["ACHR"])
+    after_call = datetime.now(UTC)
 
-    lag = before_call - captured["end"]
+    # Measured from AFTER the call: scan()'s own now() is <= after_call, so its
+    # (now - buffer) end must sit at least the full buffer before after_call.
+    # Measuring from before the call is a race - scan's now() lands microseconds
+    # later, leaving the observed lag a hair UNDER the buffer.
+    lag = after_call - captured["end"]
     assert lag >= timedelta(minutes=scanner_module.SIP_RECENCY_BUFFER_MINUTES)
 
 
