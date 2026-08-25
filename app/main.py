@@ -289,7 +289,7 @@ def test_settings():
 
     fmp = FmpClient()
     if not fmp.configured:
-        fmp_result = {"configured": False, "ok": False, "detail": "No FMP key configured (optional — float data falls back to the local list)"}
+        fmp_result = {"configured": False, "ok": False, "detail": "No FMP key configured (optional — float data falls back to Yahoo Finance, then the local list)"}
     else:
         try:
             fmp.shares_float("AAPL", use_cache=False)

@@ -38,7 +38,7 @@ const WIZARD_STEPS = [
       <ul>
         <li>Don't have keys yet? <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Get free Alpaca paper-trading keys</a> — required for quotes, charts, and trading.</li>
         <li>Paste your Alpaca <strong>paper trading</strong> API key and secret key</li>
-        <li>Optionally <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">get a free FMP key</a> too — it unlocks live float-share data for the scanner (everything else works without it)</li>
+        <li>Optionally <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">get a free FMP key</a> too — the scanner's first choice for float-share data (it falls back to Yahoo Finance automatically, so everything works without it)</li>
         <li>Click <strong>Save Settings</strong>, then <strong>Test Connection</strong> to confirm both keys actually work</li>
       </ul>
       <p>Leave "Allow live trading" unchecked unless you specifically intend to trade real money.</p>
