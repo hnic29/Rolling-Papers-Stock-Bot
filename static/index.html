@@ -392,26 +392,22 @@
 
         <article class="panel strategy-panel" id="strategy-universe">
           <h2>The Universe — What Stocks It Even Looks At</h2>
+          <p>Every scan cycle draws candidates from <strong>two sources</strong> and merges them:</p>
+          <ul class="strategy-check-list">
+            <li><strong>Today's live top gainers</strong> — Alpaca's whole-market movers screener, pulled fresh every cycle and filtered to common shares (no warrants/units/rights) in the $2–$20 range that are already up 10%+. This is what catches a day-of runner: the exact stocks this strategy exists for usually appear on no watchlist the night before — they become visible the day they move.</li>
+            <li><strong>A screened watchlist</strong> (<code>data/stock_universe.txt</code>) — built by live-screening every tradable NASDAQ/NYSE/AMEX stock (<code>scripts/build_universe.py</code>) for price $2–$20, float &le; 20,000,000 shares, and a minimal liquidity floor (&ge; 50,000 shares/day average, just to exclude dead tickers).</li>
+          </ul>
           <p>
-            The bot never scans the whole market. It only ever looks at symbols in <code>data/stock_universe.txt</code>,
-            a list built by live-screening every tradable NASDAQ/NYSE/AMEX stock (<code>scripts/build_universe.py</code>)
-            against three cheap, structural filters:
-          </p>
-          <dl>
-            <dt>Price</dt><dd>$2 – $20</dd>
-            <dt>Float</dt><dd>1,000,000 – 20,000,000 shares</dd>
-            <dt>Liquidity floor</dt><dd>&ge; 50,000 shares/day average (just excludes dead/halted tickers)</dd>
-          </dl>
-          <p>
-            The float floor and ceiling matter most: a stock with billions of shares outstanding (think AAPL or
-            TSLA) mathematically cannot move the way this strategy needs no matter how good the rest of the logic
-            is, and a stock with only a few hundred thousand shares of float is thin enough that real-world
-            slippage can make it barely tradeable even when it's "eligible" on paper. This list currently holds a
-            handful of genuinely small-float names — nothing close to the S&amp;P 500.
+            The float ceiling matters most: a stock with billions of shares outstanding (think AAPL or TSLA)
+            mathematically cannot move the way this strategy needs, no matter how good the rest of the logic is.
+            There is deliberately <strong>no float floor</strong> — a 1M minimum once existed and excluded XPON
+            (933K float) the day it ran +80% on 86M shares, and JUNS (478K float) the day it gapped +60% on 52M
+            shares. The volume pillars already guarantee tradeability on the only day the bot would touch a name.
           </p>
           <p class="chart-hint">
-            This list is a snapshot, not a live feed — it only updates when <code>scripts/build_universe.py</code> is
-            re-run. The bot watches its own age and adds a note to the status message once it's 45+ days old.
+            The watchlist is a snapshot — it only updates when <code>scripts/build_universe.py</code> is re-run, and
+            the bot flags its age in the status message once it's 45+ days old. The top-gainers feed is live every
+            cycle and needs no maintenance.
           </p>
         </article>
 

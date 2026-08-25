@@ -44,12 +44,12 @@ MIN_AVG_VOLUME = 50_000
 # The strategy's exact float gate, not a looser approximation of it - headroom here just
 # produces symbols that pass this screen but can never actually clear score_candidate's
 # real check, the same structural mismatch that made the old hand-picked list useless.
+# Deliberately NO float floor: a 1M minimum once lived here on the theory that ultra-thin
+# floats are untradeable, and it excluded XPON (933K float) the day it ran +80% on 86M
+# shares and JUNS (478K float) the day it gapped +60% on 52M shares - the exact trades
+# this strategy exists for. The volume pillars (1M+ shares traded, 5x relative volume)
+# already guarantee tradeability on the only day the bot would actually touch a name.
 MAX_FLOAT = SmallAccountPullbackStrategy.max_float
-# A floor, not just a ceiling - float this thin (a few hundred thousand shares) is more
-# "mathematically eligible" than "actually tradeable": real-world spreads and slippage on
-# names this illiquid can be brutal in ways Alpaca's paper fills don't honestly represent.
-# 1M still comfortably covers genuine small-float runners without the most extreme tail.
-MIN_FLOAT = 1_000_000
 CHUNK_SIZE = 300
 
 
@@ -108,7 +108,7 @@ def screen_by_float(symbols: list[str]) -> dict[str, int]:
             float_shares = yf.Ticker(symbol).info.get("floatShares")
         except Exception:
             float_shares = None
-        if float_shares and MIN_FLOAT <= float_shares <= MAX_FLOAT:
+        if float_shares and float_shares <= MAX_FLOAT:
             qualifying[symbol] = int(float_shares)
             print(f"  [{i}/{len(symbols)}] {symbol}: MATCH, float={int(float_shares):,}", flush=True)
         elif i % 25 == 0:
@@ -145,7 +145,7 @@ def main() -> None:
     UNIVERSE_PATH.write_text(
         f"# Built by scripts/build_universe.py on {datetime.now(UTC).date().isoformat()} - live-screened for "
         f"price ${MIN_PRICE}-${MAX_PRICE}, avg volume >= {MIN_AVG_VOLUME:,}/day, "
-        f"and float {MIN_FLOAT:,}-{MAX_FLOAT:,} shares. Re-run this periodically - float, "
+        f"and float <= {MAX_FLOAT:,} shares (no floor - see MAX_FLOAT comment). Re-run this periodically - float, "
         "price, and volume all drift, and this is only ever a snapshot.\n"
         + "\n".join(sorted(matches)) + "\n",
         encoding="utf-8",

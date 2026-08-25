@@ -112,6 +112,61 @@ def test_scan_queries_past_the_sip_recency_restriction(monkeypatch):
     assert lag >= timedelta(minutes=scanner_module.SIP_RECENCY_BUFFER_MINUTES)
 
 
+def test_todays_gainers_filters_to_tradeable_common_shares():
+    """The raw top-gainers list is full of +300% warrants at $0.01 - only common shares
+    in the strategy's price range that already cleared the minimum move are worth a
+    scan slot. Real symbols from a live screener pull."""
+    broker = MagicMock()
+    broker.top_gainers.return_value = [
+        {"symbol": "XPON", "percent_change": 80.5, "price": 6.2},  # the one that matters
+        {"symbol": "DAICW", "percent_change": 380.0, "price": 0.0096},  # warrant, penny
+        {"symbol": "TLSIW", "percent_change": 103.6, "price": 3.14},  # warrant suffix, price in range
+        {"symbol": "GIPR", "percent_change": 150.7, "price": 0.75},  # under $2
+        {"symbol": "SDOT", "percent_change": 75.7, "price": 23.16},  # over $20
+        {"symbol": "PMI", "percent_change": 9.0, "price": 5.13},  # under the 10% minimum move
+        {"symbol": "TONT.WS", "percent_change": 35.5, "price": 4.8},  # not a clean symbol
+    ]
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        picked = scanner.todays_gainers()
+
+    assert picked == {"XPON"}
+
+
+def test_todays_gainers_is_empty_when_the_screener_fails():
+    """A screener hiccup must never break the scan - the cycle just falls back to the
+    static universe alone, same as before the movers feed existed."""
+    broker = MagicMock()
+    broker.top_gainers.side_effect = Exception("screener down")
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        assert scanner.todays_gainers() == set()
+
+
+def test_scan_universe_merges_live_gainers_with_the_static_list(monkeypatch):
+    """The static watchlist alone can't catch a day-of runner (XPON, JUNS - both real
+    missed trades) - every scan must also cover today's live top gainers."""
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "load_universe", lambda: ["ACHR", "BYND"])
+    monkeypatch.setattr(scanner, "todays_gainers", lambda: {"XPON", "BYND"})
+
+    scanned = {}
+
+    def fake_scan(symbols):
+        scanned["symbols"] = symbols
+        from app.models import ScannerResponse
+        return ScannerResponse(results=[], scanned_count=len(symbols))
+
+    monkeypatch.setattr(scanner, "scan", fake_scan)
+
+    response = scanner.scan_universe()
+
+    assert scanned["symbols"] == ["ACHR", "BYND", "XPON"]  # merged, deduped, sorted
+    assert response.scanned_count == 3
+
+
 def test_fmp_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(monkeypatch):
     monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
     # Barely moves, ordinary volume - fails relative volume, total volume, and percent change.

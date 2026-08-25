@@ -12,7 +12,9 @@ from datetime import datetime
 from alpaca.common.enums import Sort
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import NewsClient, StockHistoricalDataClient
+from alpaca.data.historical.screener import ScreenerClient
 from alpaca.data.requests import (
+    MarketMoversRequest,
     NewsRequest,
     StockBarsRequest,
     StockLatestQuoteRequest,
@@ -46,9 +48,24 @@ class AlpacaBroker:
             settings.alpaca_api_key,
             settings.alpaca_secret_key,
         )
+        self.screener_client = ScreenerClient(
+            settings.alpaca_api_key,
+            settings.alpaca_secret_key,
+        )
 
     def account(self):
         return self.client.get_account()
+
+    def top_gainers(self, top: int = 50) -> list[dict]:
+        """Today's biggest percentage gainers from Alpaca's market-movers screener -
+        the whole market, not any pre-built list. This is how a day-of runner (XPON
+        +80%, JUNS +60% gap) becomes visible the day it actually moves; a static
+        watchlist screened days earlier structurally cannot catch those."""
+        movers = self.screener_client.get_market_movers(MarketMoversRequest(top=top))
+        return [
+            {"symbol": g.symbol, "percent_change": float(g.percent_change), "price": float(g.price)}
+            for g in movers.gainers
+        ]
 
     def daily_pnl(self) -> float:
         account = self.account()

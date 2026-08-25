@@ -37,3 +37,18 @@ def test_daily_bars_feed_can_still_be_overridden():
 
     request = broker.data_client.get_stock_bars.call_args.args[0]
     assert request.feed == DataFeed.IEX
+
+
+def test_top_gainers_maps_the_screener_response_to_plain_dicts():
+    from types import SimpleNamespace
+
+    broker = AlpacaBroker.__new__(AlpacaBroker)
+    broker.screener_client = MagicMock()
+    broker.screener_client.get_market_movers.return_value = SimpleNamespace(
+        gainers=[SimpleNamespace(symbol="XPON", percent_change=80.49, price=6.2)],
+        losers=[],
+    )
+
+    result = broker.top_gainers(top=5)
+
+    assert result == [{"symbol": "XPON", "percent_change": 80.49, "price": 6.2}]

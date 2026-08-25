@@ -21,6 +21,11 @@ AVG_VOLUME_WINDOW = 20  # trading days used as the relative-volume baseline
 SIP_RECENCY_BUFFER_MINUTES = 16
 
 _UNIVERSE_BUILD_DATE_PATTERN = re.compile(r"Built by scripts/build_universe\.py on (\d{4}-\d{2}-\d{2})")
+_COMMON_STOCK_SYMBOL = re.compile(r"[A-Z]{1,5}")
+# NASDAQ's 5th-letter suffix conventions: W = warrant, U = unit, R = rights - none of
+# which are the common shares this strategy trades (a top-gainers list is full of
+# +300% warrants at $0.01 that would just waste scan slots).
+_DERIVATIVE_SUFFIXES = "WUR"
 
 
 def _session_progress_fraction(now: datetime) -> float:
@@ -143,13 +148,49 @@ class MarketScanner:
             )
 
         results.sort(key=lambda item: (item.score, item.percent_change, item.total_volume), reverse=True)
-        return ScannerResponse(results=results)
+        return ScannerResponse(results=results, scanned_count=len(clean_symbols))
 
     def scan_universe(self, limit: int = 25, max_symbols: int = 250) -> ScannerResponse:
+        """The static universe list PLUS today's live top gainers. The static list alone
+        structurally cannot catch a day-of runner: it's screened days in advance, and the
+        exact stocks this strategy exists for (XPON +80% on 933K float, JUNS +60% gap on
+        478K float - both real missed trades) only become visible the day they move.
+        Merging Alpaca's market-movers screener into every scan closes that gap; the five
+        pillars then filter the junk the same way they filter everything else."""
         symbols = self.load_universe()[: max(1, min(max_symbols, 1000))]
-        response = self.scan(symbols)
+        merged = sorted(set(symbols) | self.todays_gainers())
+        response = self.scan(merged)
         ranked = response.results[: max(1, min(limit, 100))]
-        return ScannerResponse(results=ranked)
+        return ScannerResponse(results=ranked, scanned_count=response.scanned_count)
+
+    def todays_gainers(self) -> set[str]:
+        """Symbols from Alpaca's live top-gainers screener worth scanning: common shares
+        (no warrants/units/rights) inside the strategy's price range, already up at least
+        the strategy's minimum move. Failure-tolerant - a screener hiccup just means this
+        cycle scans the static universe alone, same as before this existed."""
+        try:
+            gainers = AlpacaBroker().top_gainers(top=50)
+        except Exception:
+            return set()
+
+        picked: set[str] = set()
+        for gainer in gainers:
+            symbol = str(gainer.get("symbol", "")).upper()
+            try:
+                price = float(gainer.get("price") or 0)
+                percent_change = float(gainer.get("percent_change") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not _COMMON_STOCK_SYMBOL.fullmatch(symbol):
+                continue
+            if len(symbol) == 5 and symbol[-1] in _DERIVATIVE_SUFFIXES:
+                continue
+            if not (self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price):
+                continue
+            if percent_change < self.strategy.min_percent_change:
+                continue
+            picked.add(symbol)
+        return picked
 
     def load_universe(self) -> list[str]:
         if not self.universe_path.exists():

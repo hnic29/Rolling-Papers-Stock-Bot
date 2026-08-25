@@ -112,6 +112,9 @@ class ScannerResult(BaseModel):
 
 class ScannerResponse(BaseModel):
     results: list[ScannerResult]
+    # How many symbols were actually evaluated (universe + live top-gainers), which
+    # `results` alone can't tell you - scan_universe truncates results to the top N.
+    scanned_count: int = 0
 
 
 class AppSettingsResponse(BaseModel):
