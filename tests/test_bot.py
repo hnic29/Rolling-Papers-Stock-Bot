@@ -267,6 +267,9 @@ def test_session_state_stays_active_for_a_normal_winning_day(monkeypatch, tmp_pa
 
 def test_auto_cycle_walks_away_after_an_hour_with_no_trades(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    # Pin the session open well before the baseline so the clamp is a no-op here -
+    # this test is about the idle rule itself, not the clamp.
+    monkeypatch.setattr("app.services.bot._todays_session_open_utc", lambda: datetime.now(UTC) - timedelta(hours=8))
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -286,6 +289,7 @@ def test_auto_cycle_walks_away_after_an_hour_with_no_trades(monkeypatch, tmp_pat
 
 def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr("app.services.bot._todays_session_open_utc", lambda: datetime.now(UTC) - timedelta(hours=8))
     _fund_bankroll(monkeypatch)
 
     bot = TradingBot()
@@ -300,6 +304,53 @@ def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_pa
 
     assert bot.status.walked_away_for_day is False
     assert "market is closed" in bot.status.last_message.lower()
+
+
+def test_idle_walk_away_clock_starts_at_the_open_not_before(monkeypatch, tmp_path):
+    """The bug that silenced the bot at the bell on 2026-08-25: the idle baseline was
+    the midnight state-rollover timestamp, so the FIRST 9:30 cycle read 425+ idle
+    minutes and walked away without a single scan. Idle time must only count within
+    the session: baseline hours before the open + 25 minutes into the session must
+    NOT trip a 60-minute rule."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr("app.services.bot._todays_session_open_utc", lambda: datetime.now(UTC) - timedelta(minutes=25))
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot._auto_trading_started_at = datetime.now(UTC) - timedelta(hours=8)  # e.g. midnight rollover
+
+    bot._update_session_state()
+
+    assert bot.status.walked_away_for_day is False
+
+
+def test_idle_walk_away_still_trips_an_hour_into_the_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr("app.services.bot._todays_session_open_utc", lambda: datetime.now(UTC) - timedelta(minutes=90))
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot._auto_trading_started_at = datetime.now(UTC) - timedelta(hours=8)
+
+    bot._update_session_state()
+
+    assert bot.status.walked_away_for_day is True
+    assert "momentum has cooled" in bot.status.walk_away_reason
+
+
+def test_resume_day_clears_a_walk_away_and_survives_a_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    bot = TradingBot()
+    bot.status.walked_away_for_day = True
+    bot.status.walk_away_reason = "no trade taken in over 60 minutes — momentum has cooled"
+    bot._persist_state()
+
+    bot.resume_day()
+
+    assert bot.status.walked_away_for_day is False
+    assert bot.status.walk_away_reason is None
+    assert TradingBot().status.walked_away_for_day is False  # persisted, not just in-memory
 
 
 def test_auto_cycle_stays_paused_once_walked_away_for_the_day(monkeypatch, tmp_path):

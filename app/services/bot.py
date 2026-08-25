@@ -20,6 +20,13 @@ def current_trading_day() -> date:
     return datetime.now(MARKET_TZ).date()
 
 
+def _todays_session_open_utc() -> datetime:
+    """9:30 ET on the current trading day, in UTC - the earliest moment 'idle time'
+    can meaningfully start accumulating."""
+    open_local = datetime.combine(current_trading_day(), dtime(9, 30), tzinfo=MARKET_TZ)
+    return open_local.astimezone(UTC)
+
+
 def _parse_clock(value: str) -> dtime:
     hour, minute = value.split(":")
     return dtime(int(hour), int(minute))
@@ -228,6 +235,12 @@ class TradingBot:
                 baseline = self._auto_trading_started_at
 
             if baseline is not None:
+                # Idle time only counts WITHIN today's session. The baseline (auto-trading
+                # started, or the day's state rollover at midnight) can sit hours before
+                # the open - unclamped, the very first 9:30 cycle read "425 minutes idle"
+                # and walked away at the bell without one single scan. Discovered live on
+                # 2026-08-25: the bot's first whole-market morning, silenced at 9:30:00.
+                baseline = max(baseline, _todays_session_open_utc())
                 idle_minutes = (datetime.now(UTC) - baseline).total_seconds() / 60
                 if idle_minutes > settings.max_minutes_without_trade:
                     self.status.walked_away_for_day = True
@@ -292,6 +305,20 @@ class TradingBot:
         self.status.auto_trading_enabled = True
         self._auto_trading_started_at = datetime.now(UTC)
         self.status.last_message = "Auto-trading enabled — will scan and trade automatically while the market is open"
+        self._persist_state()
+        return self.status
+
+    def resume_day(self) -> BotStatus:
+        """Explicit manual override that clears a walk-away for the rest of today. The
+        stickiness is deliberate (coming back after walking away is the FOMO trap the
+        rules exist to prevent), so this never happens automatically - but the human
+        stays in charge of their own discipline, and it's also the recovery path when
+        a trip was wrong (the unclamped idle-baseline bug walked away AT the open)."""
+        self.refresh_status()
+        self.status.walked_away_for_day = False
+        self.status.walk_away_reason = None
+        self._auto_trading_started_at = datetime.now(UTC)  # restart the idle clock too
+        self.status.last_message = "Walk-away cleared — auto-trading may take new entries again today"
         self._persist_state()
         return self.status
 

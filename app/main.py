@@ -326,6 +326,13 @@ def stop_automation():
     return bot.stop_auto_trading()
 
 
+@app.post("/api/automation/resume-day", response_model=BotStatus)
+def resume_day():
+    """Manual override: clears today's walk-away so auto-trading may take new entries
+    again. Deliberately never automatic - see TradingBot.resume_day."""
+    return bot.resume_day()
+
+
 @app.post("/api/scanner")
 def scan_market(request: ScannerRequest):
     try:
