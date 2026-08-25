@@ -218,6 +218,52 @@ def test_full_market_sweep_survives_a_failed_chunk(monkeypatch):
     assert swept == 0
 
 
+def _snapshot(price, prev_close, iex_volume):
+    return {"price": price, "prev_close": prev_close, "today_volume_iex": iex_volume, "trade_time": None}
+
+
+def test_realtime_gap_candidates_finds_a_live_gapper_with_no_lag(monkeypatch):
+    """The Ross lane: gap% comes from the real-time latest trade vs yesterday's close -
+    a stock gapping NOW is a candidate NOW, not 16 minutes from now."""
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 0.5)
+    monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lambda s: 900_000)
+
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: ["GAPR", "QUIET", "PRICY", "STALE", "ABCDW"])
+    monkeypatch.setattr(scanner, "load_metadata", lambda: {})
+
+    broker = MagicMock()
+    broker.snapshots.return_value = {
+        "GAPR": _snapshot(price=6.2, prev_close=3.4, iex_volume=50_000),  # +82% gap, active
+        "QUIET": _snapshot(price=5.0, prev_close=4.9, iex_volume=50_000),  # +2% - no gap
+        "PRICY": _snapshot(price=60.0, prev_close=30.0, iex_volume=50_000),  # out of range
+        "STALE": _snapshot(price=6.0, prev_close=3.0, iex_volume=500),  # one stale odd lot
+        "ABCDW": _snapshot(price=6.0, prev_close=3.0, iex_volume=50_000),  # warrant suffix
+    }
+    broker.daily_bars.side_effect = Exception("bars unavailable this cycle")  # lane still works
+
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        candidates = scanner.realtime_gap_candidates()
+
+    assert [c.symbol for c in candidates] == ["GAPR"]
+    gapper = candidates[0]
+    assert gapper.percent_change == 82.35
+    assert gapper.price == 6.2
+    assert gapper.float_shares == 900_000
+    assert gapper.total_volume == 0  # consolidated bar absent - pillar honestly unscored
+
+
+def test_realtime_gap_candidates_is_empty_when_snapshots_fail(monkeypatch):
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: ["GAPR"])
+
+    broker = MagicMock()
+    broker.snapshots.side_effect = Exception("snapshot endpoint down")
+
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        assert scanner.realtime_gap_candidates() == []
+
+
 def test_tradable_symbols_are_cached_for_the_day(monkeypatch):
     from app.services import scanner as scanner_module
 

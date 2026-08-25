@@ -8,6 +8,13 @@ from app.services import bankroll, bot_state, trade_log
 from app.services.bot import STALE_UNIVERSE_DAYS, TradingBot, current_trading_day
 
 
+@pytest.fixture(autouse=True)
+def _no_real_gap_lane(monkeypatch):
+    """auto_cycle's real-time gap lane hits live snapshot/asset endpoints - tests must
+    never do that. Individual tests override this on their own bot.scanner instance."""
+    monkeypatch.setattr("app.services.scanner.MarketScanner.realtime_gap_candidates", lambda self: [])
+
+
 def _fund_bankroll(monkeypatch, amount=100_000.0):
     """These tests exercise other behavior (market-closed checks, order
     submission, walk-away timing) and aren't about the bankroll feature
@@ -306,6 +313,56 @@ def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_pa
     assert "market is closed" in bot.status.last_message.lower()
 
 
+def test_auto_cycle_gap_lane_trades_a_live_gapper_the_lagged_scan_cannot_see(tmp_path, monkeypatch):
+    """The Ross lane end-to-end: the lagged scan returns NOTHING (e.g. the first 16
+    minutes after the open, before a consolidated today-bar exists), but a real-time
+    gap candidate still reaches entry evaluation carrying its LIVE numbers - including
+    total_volume=0 scoring an honest 4-of-5, which qualifies."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+
+    live_gapper = StockCandidate(
+        symbol="GAPR", price=6.2, percent_change=82.0, relative_volume=25.0,
+        total_volume=0, float_shares=900_000, is_leading_gainer=True,
+    )
+    monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [live_gapper])
+
+    captured = {}
+
+    def fake_setup(symbol, scanner, candidate=None):
+        captured["candidate"] = candidate
+        return _setup(symbol)
+
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", fake_setup)
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=6.5))
+
+    fake_order = MagicMock()
+    fake_order.id = "gap-order-1"
+    fake_order.symbol = "GAPR"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+        args, _ = MockBroker.return_value.submit_market_order.call_args
+        assert args[0] == "GAPR"
+
+    # The LIVE candidate was injected into setup-building - not re-derived from
+    # lagged data that would have described yesterday.
+    assert captured["candidate"] is live_gapper
+
+
 def test_idle_walk_away_clock_starts_at_the_open_not_before(monkeypatch, tmp_path):
     """The bug that silenced the bot at the bell on 2026-08-25: the idle baseline was
     the midnight state-rollover timestamp, so the FIRST 9:30 cycle read 425+ idle
@@ -381,7 +438,7 @@ def test_auto_cycle_places_a_bracket_trade_for_a_real_buy_signal(tmp_path, monke
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
 
     monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("ACHR")]))
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
     monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
 
     fake_order = MagicMock()
@@ -443,7 +500,7 @@ def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypat
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
 
     monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("ACHR")]))
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
     monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
 
     fake_order = MagicMock()
@@ -474,7 +531,7 @@ def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
     monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("ACHR")]))
     # No exit signal, so the held position should also stay open (no sell either).
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
@@ -535,7 +592,7 @@ def test_manage_open_positions_closes_on_a_red_candle_exit_signal(tmp_path, monk
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "exit-order-1"
@@ -563,7 +620,7 @@ def test_manage_open_positions_cancels_resting_orders_before_selling(tmp_path, m
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "exit-order-5"
@@ -595,7 +652,7 @@ def test_manage_open_positions_links_the_exit_back_to_the_buy_row(tmp_path, monk
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "closing-sell-1"
@@ -617,7 +674,7 @@ def test_manage_open_positions_links_the_exit_back_to_the_buy_row(tmp_path, monk
 def test_manage_open_positions_leaves_a_quiet_position_open(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
         exited = bot._manage_open_positions([{"symbol": "ACHR", "qty": 10}])
@@ -636,7 +693,7 @@ def test_manage_open_positions_works_even_when_bankroll_is_empty(tmp_path, monke
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "exit-order-2"
@@ -664,7 +721,7 @@ def test_manage_open_positions_works_even_when_walked_away_for_the_day(tmp_path,
     bot.status.daily_pnl = 0.0
     bot.status.walked_away_for_day = True
     bot.status.walk_away_reason = "3 losing trades in a row"
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "exit-order-3"
@@ -696,7 +753,7 @@ def test_manage_open_positions_works_even_when_auto_trading_is_disabled(tmp_path
     bot = TradingBot()
     bot.status.auto_trading_enabled = False
     bot.status.daily_pnl = 0.0
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     fake_order = MagicMock()
     fake_order.id = "exit-order-4"
@@ -729,7 +786,7 @@ def test_auto_cycle_no_longer_manages_positions_itself(tmp_path, monkeypatch):
     bot.status.daily_pnl = 0.0
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
     monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner: _setup(symbol, _RED_CANDLE))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)

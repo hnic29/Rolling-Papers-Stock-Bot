@@ -32,7 +32,10 @@ class Settings(BaseSettings):
     max_position_value_pct: float = 20.0
     max_daily_loss_pct: float = 6.0
     fmp_api_key: str = ""
-    automation_interval_seconds: int = 120
+    # 60s, halved from 120: Ross's window is measured in minutes, and per-cycle API
+    # cost (~28 sweep + ~28 snapshot requests) stays well inside Alpaca's 200/min
+    # free-tier limit even at this pace.
+    automation_interval_seconds: int = 60
     automation_scan_limit: int = 10
     # The curated universe list (data/stock_universe.txt) is ~110 symbols; this used to
     # default to 30, silently scanning only the same alphabetical first slice of it every

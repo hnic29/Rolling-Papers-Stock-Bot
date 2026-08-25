@@ -32,6 +32,11 @@ _DERIVATIVE_SUFFIXES = "WUR"
 # (200/min) even on a 2-minute cycle.
 SWEEP_CHUNK_SIZE = 300
 SWEEP_MAX_HITS = 25  # hits get the full (quotes/news/float) scan - keep that bounded
+# Real-time gap lane: minimum TODAY volume on the IEX feed just to prove a gapping
+# print is real trading, not one stale odd lot. IEX carries only a slice of
+# consolidated volume (~2-3% verified), so this is deliberately small.
+GAP_LANE_MIN_IEX_VOLUME = 10_000
+GAP_LANE_MAX_CANDIDATES = 25
 # The tradable-symbol list barely changes intraday; refetching ~14K assets every
 # 2-minute cycle would be pure waste. Cached per calendar day, module-level so the
 # manual Auto Scan button and the automation loop share it.
@@ -179,6 +184,114 @@ class MarketScanner:
         response = self.scan(merged)
         ranked = response.results[: max(1, min(limit, 100))]
         return ScannerResponse(results=ranked, scanned_count=response.scanned_count, swept_count=swept_count)
+
+    def realtime_gap_candidates(self) -> list[StockCandidate]:
+        """The Ross lane: a LIVE gap scan of the whole market with zero data lag,
+        producing fully-built candidates for immediate entry evaluation. This is what
+        he's watching at the open that the lagged sweep can't see until ~9:46.
+
+        Sources are chosen so nothing is fabricated:
+        - price and gap%% - real-time snapshot latest trade vs yesterday's close
+        - relative volume - today's IEX volume vs a 20-day IEX average, same-source so
+          the ratio is unbiased even though IEX is a slice of consolidated volume
+        - total volume - today's CONSOLIDATED (SIP) bar when it exists; before it does
+          (the first ~16 minutes), the pillar simply scores zero and a candidate must
+          earn its 4-of-5 from gap, price, float, and relative volume instead
+        - float - the FMP->Yahoo->local chain
+
+        Failure-tolerant everywhere: any layer failing just narrows this cycle's lane."""
+        symbols = self._tradable_symbols()
+        if not symbols:
+            return []
+
+        broker = AlpacaBroker()
+        surviving: list[tuple[float, str, float, int]] = []  # (gap_pct, symbol, price, iex_volume)
+        for i in range(0, len(symbols), SWEEP_CHUNK_SIZE):
+            chunk = symbols[i : i + SWEEP_CHUNK_SIZE]
+            try:
+                snaps = broker.snapshots(chunk)
+            except Exception:
+                continue
+            for symbol, snap in snaps.items():
+                price = snap.get("price")
+                prev_close = snap.get("prev_close")
+                if not price or not prev_close:
+                    continue
+                if len(symbol) == 5 and symbol[-1] in _DERIVATIVE_SUFFIXES:
+                    continue
+                if not (self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price):
+                    continue
+                gap_pct = (price / prev_close - 1) * 100
+                if gap_pct < self.strategy.min_percent_change:
+                    continue
+                if snap.get("today_volume_iex", 0) < GAP_LANE_MIN_IEX_VOLUME:
+                    continue
+                surviving.append((gap_pct, symbol, price, snap["today_volume_iex"]))
+
+        surviving.sort(reverse=True)
+        surviving = surviving[:GAP_LANE_MAX_CANDIDATES]
+        if not surviving:
+            return []
+
+        survivors = [symbol for _, symbol, _, _ in surviving]
+        end = datetime.now(UTC)
+        start = end - timedelta(days=40)
+
+        # Same-source (IEX/IEX) baseline for relative volume.
+        try:
+            from alpaca.data.enums import DataFeed
+
+            iex_bars = broker.daily_bars(survivors, start=start, end=end - timedelta(minutes=1), feed=DataFeed.IEX)
+        except Exception:
+            iex_bars = None
+
+        # Consolidated volume for the absolute pillar, where a today-bar exists yet.
+        try:
+            sip_bars = broker.daily_bars(survivors, start=start, end=end - timedelta(minutes=SIP_RECENCY_BUFFER_MINUTES))
+        except Exception:
+            sip_bars = None
+
+        session_progress = _session_progress_fraction(end)
+        today = datetime.now(MARKET_TZ).date()
+        metadata = self.load_metadata()
+
+        candidates: list[StockCandidate] = []
+        for gap_pct, symbol, price, iex_volume_today in surviving:
+            relative_volume = 0.0
+            if iex_bars is not None:
+                history = [
+                    int(bar.volume or 0)
+                    for bar in iex_bars.data.get(symbol, [])
+                    if bar.timestamp.astimezone(MARKET_TZ).date() != today
+                ][-AVG_VOLUME_WINDOW:]
+                if history:
+                    baseline = (sum(history) / len(history)) * session_progress
+                    relative_volume = iex_volume_today / baseline if baseline else 0.0
+
+            total_volume = 0
+            if sip_bars is not None:
+                todays_sip = [
+                    bar for bar in sip_bars.data.get(symbol, [])
+                    if bar.timestamp.astimezone(MARKET_TZ).date() == today
+                ]
+                if todays_sip:
+                    total_volume = int(todays_sip[0].volume or 0)
+
+            float_shares = float_lookup.float_shares(symbol) or metadata.get(symbol, {}).get("float_shares")
+            candidates.append(
+                StockCandidate(
+                    symbol=symbol,
+                    price=price,
+                    percent_change=round(gap_pct, 2),
+                    relative_volume=round(relative_volume, 2),
+                    total_volume=total_volume,
+                    float_shares=float_shares,
+                    has_news=False,
+                    sector=metadata.get(symbol, {}).get("sector"),
+                    is_leading_gainer=True,
+                )
+            )
+        return candidates
 
     def _tradable_symbols(self) -> list[str]:
         """All tradable symbols, cached per calendar day - listings barely change

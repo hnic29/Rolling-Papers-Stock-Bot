@@ -100,7 +100,7 @@ const WIZARD_STEPS = [
   {
     title: "Automate it (optional)",
     body: `
-      <p><strong>Auto-Trading</strong> (top bar, off by default) runs the strategy hands-free during market hours: every couple of minutes it sweeps the <strong>entire market</strong> (~8,000+ tradable stocks) for anything fitting the five-pillar profile, and for a genuine buy signal — a first pullback holding above VWAP and the 9&nbsp;EMA with a new-high break — it buys with a <strong>stop-loss resting at the broker</strong>.</p>
+      <p><strong>Auto-Trading</strong> (top bar, off by default) runs the strategy hands-free during market hours: every minute it sweeps the <strong>entire market</strong> (~8,000+ tradable stocks) for anything fitting the five-pillar profile, and for a genuine buy signal — a first pullback holding above VWAP and the 9&nbsp;EMA with a new-high break — it buys with a <strong>stop-loss resting at the broker</strong>.</p>
       <p>There's deliberately <em>no</em> automatic profit target: winners are held past the first level, and the bot re-checks every open position each cycle for real exit indicators (a red candle, a topping tail) and sells when one fires. That position monitoring runs <strong>even when auto-trading is off</strong> — anything you hold is always being watched while the market is open.</p>
       <p>Daily discipline rules pause new entries for the rest of the day: 3 losing trades in a row, giving back half the day's peak profit, or an hour passing without a trade. All of this state survives restarts. <strong>Run Tick</strong> is the manual version — it evaluates one symbol and reports what it sees without trading.</p>
     `,

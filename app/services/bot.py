@@ -400,15 +400,31 @@ class TradingBot:
             self.status.last_message = f"Automation scan failed: {exc}"
             return self.status
 
-        qualifying = [c for c in scan_results if c.score >= 4 and c.symbol not in held_symbols]
+        # The Ross lane first: LIVE gap candidates from real-time snapshots, evaluated
+        # with their live numbers injected (no 16-minute lag, works from the opening
+        # bell). The lagged-but-consolidated scan below stays as the second net.
+        gap_lane: list = []
+        try:
+            for live in self.scanner.realtime_gap_candidates():
+                score, _reasons = self.strategy.score_candidate(live)
+                if score >= 4 and live.symbol not in held_symbols:
+                    gap_lane.append(live)
+        except Exception:
+            pass  # gap lane failing narrows this cycle to the lagged scan, never breaks it
+
+        gap_symbols = {c.symbol for c in gap_lane}
+        qualifying = [c for c in scan_results if c.score >= 4 and c.symbol not in held_symbols and c.symbol not in gap_symbols]
+
+        # (symbol, injected live candidate or None) - gap lane evaluated first.
+        entry_queue = [(c.symbol, c) for c in gap_lane] + [(c.symbol, None) for c in qualifying]
 
         traded: list[str] = []
         skipped: list[str] = []
-        for candidate in qualifying:
+        for symbol, live_candidate in entry_queue:
             if self.status.trades_today >= settings.max_trades_per_day:
                 break
             try:
-                setup = build_pullback_setup(candidate.symbol, self.scanner)
+                setup = build_pullback_setup(symbol, self.scanner, candidate=live_candidate)
                 decision = self.strategy.evaluate(setup)
             except Exception:
                 continue
@@ -434,7 +450,7 @@ class TradingBot:
             # broker, so a winner isn't automatically capped at the first target. See
             # _manage_open_positions for what actually closes the position later.
             trade = TradeRequest(
-                symbol=candidate.symbol,
+                symbol=symbol,
                 qty=qty,
                 side=Signal.buy,
                 estimated_price=setup.proposed_entry,
@@ -442,9 +458,9 @@ class TradingBot:
             )
             try:
                 self.submit_trade(trade)
-                traded.append(candidate.symbol)
+                traded.append(symbol)
             except ValueError as exc:
-                skipped.append(f"{candidate.symbol} ({exc})")
+                skipped.append(f"{symbol} ({exc})")
                 continue
 
         parts = []

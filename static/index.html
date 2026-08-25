@@ -99,7 +99,7 @@
             <dt>Auto-Trading</dt><dd id="auto-trading-status">-</dd>
             <dt>Last automation run</dt><dd id="last-automation-run">-</dd>
           </dl>
-          <p class="chart-hint">When on, the bot scans the stock universe on its own every couple of minutes and places bracket trades for real buy signals — no manual clicking needed.</p>
+          <p class="chart-hint">When on, the bot scans the stock universe on its own every minute and places stop-protected trades for real buy signals — no manual clicking needed.</p>
         </article>
 
         <article class="panel" id="section-clock">
@@ -393,9 +393,10 @@
 
         <article class="panel strategy-panel" id="strategy-universe">
           <h2>The Universe — What Stocks It Even Looks At</h2>
-          <p>Every scan cycle draws candidates from <strong>three sources</strong> and merges them:</p>
+          <p>Every scan cycle draws candidates from <strong>four sources</strong> and merges them:</p>
           <ul class="strategy-check-list">
-            <li><strong>A true whole-market sweep</strong> — every tradable NASDAQ/NYSE/AMEX common stock (~8,000+, refreshed daily) screened each cycle against the actual pillar math: price $2–$20, up 10%+, 1M+ shares traded, 5x relative volume. Nothing needs to be on any list in advance to be found — this is the Ross-style scanner, and it runs in ~15 seconds per cycle.</li>
+            <li><strong>A real-time gap lane</strong> — live snapshot prices (zero data lag) across the whole market, computing each stock's gap off yesterday's close <em>the moment it moves</em>. This is what makes the bot able to act from the opening bell instead of waiting ~16 minutes for consolidated data; gap-lane candidates carry their live numbers straight into entry evaluation.</li>
+            <li><strong>A true whole-market sweep</strong> — every tradable NASDAQ/NYSE/AMEX common stock (~8,000+, refreshed daily) screened each cycle against the actual pillar math on consolidated data: price $2–$20, up 10%+, 1M+ shares traded, 5x relative volume. Nothing needs to be on any list in advance to be found.</li>
             <li><strong>Today's live top gainers</strong> — Alpaca's movers screener as a fast secondary net (and the fallback if a sweep fails mid-cycle), filtered the same way.</li>
             <li><strong>A screened watchlist</strong> (<code>data/stock_universe.txt</code>) — pre-screened small-floats worth watching even on days they haven't yet moved enough to surface in the sweep.</li>
           </ul>
@@ -497,8 +498,8 @@
         </article>
 
         <article class="panel strategy-panel" id="strategy-cycle">
-          <h2>The Automation Cycle — Every 2 Minutes, In Order</h2>
-          <p>While the bot process is running, this sequence repeats every 120 seconds, every step independent of the others failing:</p>
+          <h2>The Automation Cycle — Every Minute, In Order</h2>
+          <p>While the bot process is running, this sequence repeats every 60 seconds, every step independent of the others failing:</p>
           <ol class="strategy-cycle-list">
             <li><strong>Sync</strong> — reconcile every pending order and open exit against Alpaca's real fill data. This runs headless, with or without the dashboard open.</li>
             <li><strong>Manage open positions</strong> — check every held position for an exit indicator, close if one fired. <em>Runs unconditionally</em>, even with Auto-Trading off.</li>

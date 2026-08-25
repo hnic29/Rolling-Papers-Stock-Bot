@@ -21,6 +21,7 @@ from alpaca.data.requests import (
     NewsRequest,
     StockBarsRequest,
     StockLatestQuoteRequest,
+    StockSnapshotRequest,
 )
 from alpaca.data.timeframe import TimeFrame
 
@@ -69,6 +70,29 @@ class AlpacaBroker:
             {"symbol": g.symbol, "percent_change": float(g.percent_change), "price": float(g.price)}
             for g in movers.gainers
         ]
+
+    def snapshots(self, symbols: list[str]) -> dict[str, dict]:
+        """Real-time snapshot per symbol: latest trade price/time, today's IEX daily bar,
+        and yesterday's daily bar - all in one batched call with ZERO recency lag on the
+        free tier (verified live: latest_trade timestamps within seconds). This is what
+        makes a Ross-style live gap scan possible: gap% = latest trade vs yesterday's
+        close, computed the moment it happens instead of 16 minutes later."""
+        request = StockSnapshotRequest(symbol_or_symbols=[s.upper() for s in symbols], feed=DataFeed.IEX)
+        raw = self.data_client.get_stock_snapshot(request)
+        result: dict[str, dict] = {}
+        for symbol, snap in raw.items():
+            if snap is None:
+                continue
+            latest_trade = snap.latest_trade
+            today = snap.daily_bar
+            previous = snap.previous_daily_bar
+            result[symbol] = {
+                "price": float(latest_trade.price) if latest_trade and latest_trade.price else None,
+                "trade_time": latest_trade.timestamp if latest_trade else None,
+                "today_volume_iex": int(today.volume) if today and today.volume else 0,
+                "prev_close": float(previous.close) if previous and previous.close else None,
+            }
+        return result
 
     def all_tradable_symbols(self) -> list[str]:
         """Every active, tradable common-stock symbol on NASDAQ/NYSE/AMEX (~8,000+) -

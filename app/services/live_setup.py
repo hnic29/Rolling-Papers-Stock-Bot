@@ -45,24 +45,31 @@ def compute_vwap(candles: list[Candle]) -> float:
     return total_dollar_volume / total_volume
 
 
-def build_pullback_setup(symbol: str, scanner: MarketScanner) -> PullbackSetup:
-    """Assemble a real PullbackSetup for `symbol` from live scanner + candle data."""
-    scan = scanner.scan([symbol])
-    if not scan.results:
-        raise ValueError(f"no market data available for {symbol}")
-    result = scan.results[0]
+def build_pullback_setup(symbol: str, scanner: MarketScanner, candidate: StockCandidate | None = None) -> PullbackSetup:
+    """Assemble a real PullbackSetup for `symbol` from live scanner + candle data.
 
-    candidate = StockCandidate(
-        symbol=result.symbol,
-        price=result.price,
-        percent_change=result.percent_change,
-        relative_volume=result.relative_volume or 0.0,
-        total_volume=result.total_volume,
-        float_shares=result.float_shares,
-        has_news=result.has_news,
-        sector=result.sector,
-        is_leading_gainer=False,
-    )
+    A caller may inject a pre-built `candidate` - the real-time gap lane does, because
+    its candidate carries LIVE gap/price numbers, while re-deriving one here would
+    score it from the 16-minute-lagged daily feed (which, before today's consolidated
+    bar exists, would silently describe YESTERDAY's session instead of the move
+    happening right now)."""
+    if candidate is None:
+        scan = scanner.scan([symbol])
+        if not scan.results:
+            raise ValueError(f"no market data available for {symbol}")
+        result = scan.results[0]
+
+        candidate = StockCandidate(
+            symbol=result.symbol,
+            price=result.price,
+            percent_change=result.percent_change,
+            relative_volume=result.relative_volume or 0.0,
+            total_volume=result.total_volume,
+            float_shares=result.float_shares,
+            has_news=result.has_news,
+            sector=result.sector,
+            is_leading_gainer=False,
+        )
 
     broker = AlpacaBroker()
     end = datetime.now(UTC)
