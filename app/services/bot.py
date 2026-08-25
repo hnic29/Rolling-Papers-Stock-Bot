@@ -271,15 +271,9 @@ class TradingBot:
                 # Cancel every open order on the symbol first or this close never works.
                 self._cancel_open_orders(symbol)
 
-                result = self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell))
-
-                # Link the closing sell back to the original buy row(s) - it isn't a
-                # bracket leg of the buy order, so without this link the buy would look
-                # open forever (never any realized P&L for the walk-away rules, and
-                # deployed_capital would keep charging the bankroll for a closed
-                # position). trade_sync completes the exit once the sell fills.
-                for buy in trade_log.open_filled_buys(symbol):
-                    trade_log.record_pending_exit(buy["order_id"], result["id"], "exit_signal")
+                # submit_trade links the sell back to the open buy row(s) with this
+                # reason; trade_sync realizes the P&L once the sell fills.
+                self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell), exit_reason="exit_signal")
                 exited.append(symbol)
             except Exception:
                 continue  # a single bad symbol/order should never stall managing the rest
@@ -475,7 +469,7 @@ class TradingBot:
             self.status.last_message = f"Closed {', '.join(exited)} on an exit signal"
         return self.status
 
-    def submit_trade(self, trade: TradeRequest) -> dict:
+    def submit_trade(self, trade: TradeRequest, exit_reason: str = "manual_close") -> dict:
         self.refresh_status()
         self.risk.validate(trade, self.status.trades_today, self.status.daily_pnl)
         if trade.side == Signal.buy:
@@ -506,6 +500,17 @@ class TradingBot:
             take_profit_price=trade.take_profit_price,
             entry_price_estimate=trade.estimated_price if trade.side == Signal.buy else None,
         )
+
+        # EVERY sell that closes a long links back to the open buy row(s) it closes -
+        # not just automated exit-signal sells. A sell isn't a bracket leg of the buy
+        # order, so without this link the buy would look open forever: deployed_capital
+        # keeps charging the bankroll for a closed position, and the realized P&L never
+        # reaches the walk-away rules. This used to live only in the exit-signal path,
+        # which left manual closes (dashboard sell / API) with exactly that bug.
+        # trade_sync completes the exit (price, P&L) once the sell actually fills.
+        if trade.side == Signal.sell:
+            for buy in trade_log.open_filled_buys(trade.symbol):
+                trade_log.record_pending_exit(buy["order_id"], str(order.id), exit_reason)
 
         # Buys only - sells get their notification when the exit CONFIRMS with real
         # P&L (trade_sync), which is the number that actually matters. Notifying the

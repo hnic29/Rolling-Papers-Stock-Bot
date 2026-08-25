@@ -115,9 +115,10 @@ def test_submit_trade_rejects_a_manual_buy_that_exceeds_the_bankroll(tmp_path, m
     MockBroker.return_value.submit_market_order.assert_not_called()
 
 
-def test_submit_trade_allows_a_sell_regardless_of_bankroll():
+def test_submit_trade_allows_a_sell_regardless_of_bankroll(tmp_path, monkeypatch):
     """You should always be able to close a position, even with an empty
     bankroll - the gate only applies to opening new exposure."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
 
@@ -134,6 +135,37 @@ def test_submit_trade_allows_a_sell_regardless_of_bankroll():
         result = bot.submit_trade(TradeRequest(symbol="AAPL", qty=1, side=Signal.sell))
 
     assert result["id"] == "sell-order-1"
+
+
+def test_a_manual_sell_links_the_exit_back_to_the_buy_row(tmp_path, monkeypatch):
+    """The gap that left a manually-closed position charging the bankroll forever:
+    exit linkage only existed in the automated exit-signal path, so a sell placed
+    through the dashboard/API never marked the buy row as closing - deployed_capital
+    kept counting it and its realized P&L never got recorded. Every sell through
+    submit_trade now links, with reason 'manual_close' unless the caller says
+    otherwise."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    trade_log.record_trade(order_id="manual-buy-1", symbol="SMTK", side="buy", qty=1, status="filled")
+    trade_log.update_fill(order_id="manual-buy-1", status="filled", filled_avg_price=4.79, filled_qty=1, filled_at=datetime.now(UTC).isoformat())
+
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+
+    fake_order = MagicMock()
+    fake_order.id = "manual-sell-1"
+    fake_order.symbol = "SMTK"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.submit_trade(TradeRequest(symbol="SMTK", qty=1, side=Signal.sell))
+
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "manual-buy-1")
+    assert buy["exit_order_id"] == "manual-sell-1"
+    assert buy["exit_reason"] == "manual_close"
+    assert buy["realized_pnl"] is None  # completed by trade_sync once the sell fills
 
 
 def test_auto_cycle_is_a_no_op_when_auto_trading_is_disabled():
