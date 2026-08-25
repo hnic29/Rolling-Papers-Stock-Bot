@@ -266,10 +266,11 @@
         <article class="panel scanner-panel" id="section-scanner">
           <h2>Market Scanner</h2>
           <form id="scanner-form" class="scanner-form">
-            <label>Symbols <input name="symbols" value="AAPL, TSLA, NVDA, AMD, PLTR" /></label>
+            <label>Symbols <input name="symbols" placeholder="e.g. XPON, GGR — or leave empty and use Auto Scan" title="Score specific symbols against the five pillars. Mega-caps (AAPL, TSLA, ...) will always score low here — their floats are billions of shares, the opposite of what this strategy trades. Auto Scan sweeps the whole market instead." /></label>
             <button type="submit">Scan</button>
             <button id="auto-scan" type="button">Auto Scan</button>
           </form>
+          <p class="chart-hint">Auto Scan sweeps all ~8,000+ tradable stocks plus today's live top gainers — the same scan auto-trading runs every cycle. The symbol box is for checking specific names.</p>
           <div class="table-wrap">
             <table>
               <thead>

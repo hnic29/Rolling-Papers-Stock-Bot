@@ -1660,8 +1660,15 @@ document.querySelector("#quote-form").addEventListener("submit", async (event) =
 document.querySelector("#scanner-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const symbolsText = String(form.get("symbols") || "").trim();
   try {
-    await scanSymbols(String(form.get("symbols") || ""));
+    // An empty box means "scan everything" - same as the Auto Scan button, instead
+    // of a silent empty result.
+    if (symbolsText) {
+      await scanSymbols(symbolsText);
+    } else {
+      await autoScan();
+    }
   } catch (error) {
     document.querySelector("#message").textContent = error.message;
   }
