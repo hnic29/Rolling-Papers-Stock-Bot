@@ -365,6 +365,75 @@ def test_auto_cycle_gap_lane_trades_a_live_gapper_the_lagged_scan_cannot_see(tmp
     assert captured["candidate"] is live_gapper
 
 
+def test_a_dilution_risk_catalyst_halves_position_size(tmp_path, monkeypatch):
+    """The GRML lesson, encoded: a proposed/registered offering (or reverse split,
+    going-concern, ...) is a real, well-known day-trading risk signal - not a hard
+    block (the pattern can still run hard first), but size gets halved."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch, amount=100_000.0)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("GRML")]))
+
+    risky_candidate = StockCandidate(
+        symbol="GRML", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000,
+        news_sentiment="negative", news_category="offering_dilution", news_headline="Proposed Public Offering",
+    )
+    risky_setup = PullbackSetup(
+        candidate=risky_candidate, candles=[], ema9=4.9, macd=0.01, vwap=4.9,
+        high_of_day=5.05, pullback_low=4.9, proposed_entry=5.0, proposed_stop=4.9,
+    )
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: risky_setup)
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
+
+    fake_order = MagicMock()
+    fake_order.id = "dilution-order-1"
+    fake_order.symbol = "GRML"
+    fake_order.status = "accepted"
+
+    sent = []
+    monkeypatch.setattr("app.services.bot.notify.send", lambda title, message, **kw: sent.append(title))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+        risky_qty = MockBroker.return_value.submit_market_order.call_args[0][1]
+
+    # Rerun with a clean (non-dilution) candidate at the same price/stop/bankroll to
+    # get the baseline the halving should be measured against.
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log2.db")
+    bot2 = TradingBot()
+    bot2.status.auto_trading_enabled = True
+    bot2.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot2, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot2.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("CLEAN")]))
+    clean_setup = PullbackSetup(
+        candidate=StockCandidate(symbol="CLEAN", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000),
+        candles=[], ema9=4.9, macd=0.01, vwap=4.9, high_of_day=5.05, pullback_low=4.9, proposed_entry=5.0, proposed_stop=4.9,
+    )
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: clean_setup)
+    monkeypatch.setattr(bot2.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot2.auto_cycle()
+        clean_qty = MockBroker.return_value.submit_market_order.call_args[0][1]
+
+    assert risky_qty == clean_qty // 2
+    assert any("dilution-risk" in title.lower() for title in sent)
+
+
 def test_idle_walk_away_clock_starts_at_the_open_not_before(monkeypatch, tmp_path):
     """The bug that silenced the bot at the bell on 2026-08-25: the idle baseline was
     the midnight state-rollover timestamp, so the FIRST 9:30 cycle read 425+ idle

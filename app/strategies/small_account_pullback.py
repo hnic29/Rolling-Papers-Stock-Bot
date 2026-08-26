@@ -1,5 +1,6 @@
 from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StrategyDecision, StockCandidate
+from app.services.catalyst import SENTIMENT_NEGATIVE, describe_catalyst
 
 
 HOT_SECTORS = {"ai", "biotech", "china", "chinese tech", "tech"}
@@ -43,8 +44,9 @@ class SmallAccountPullbackStrategy:
             score += 1
             reasons.append("float is below 20M shares")
 
-        if candidate.has_news:
-            reasons.append("has a news catalyst")
+        catalyst_reason = describe_catalyst(candidate.news_category, candidate.news_sentiment)
+        if catalyst_reason:
+            reasons.append(catalyst_reason)
         elif candidate.is_leading_gainer:
             reasons.append("no news, but it is a leading gainer")
         elif candidate.sector and candidate.sector.lower() in HOT_SECTORS:

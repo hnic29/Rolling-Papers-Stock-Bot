@@ -55,6 +55,14 @@ class StockCandidate(BaseModel):
     total_volume: int
     float_shares: int | None = None
     has_news: bool = False
+    news_headline: str | None = None
+    # Set by app.services.catalyst.classify_catalyst - "none" when has_news is False,
+    # "other" for a headline that doesn't match a known pattern, or a specific category
+    # (contract, fda_clinical, offering_dilution, ...). news_sentiment is "negative" for
+    # dilution-risk catalysts (proposed offering, reverse split, ...), "positive" for a
+    # recognized constructive catalyst, "neutral" otherwise.
+    news_category: str = "none"
+    news_sentiment: str = "neutral"
     sector: str | None = None
     is_leading_gainer: bool = False
 
@@ -109,6 +117,8 @@ class ScannerResult(BaseModel):
     has_news: bool = False
     news_headline: str | None = None
     news_url: str | None = None
+    news_category: str = "none"
+    news_sentiment: str = "neutral"
     score: int
     signal: Signal
     reasons: list[str]

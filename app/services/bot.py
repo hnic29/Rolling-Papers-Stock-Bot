@@ -5,6 +5,7 @@ from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import settings
 from app.models import BotStatus, Signal, TradeRequest
 from app.services import bankroll, bot_state, notify, trade_log
+from app.services.catalyst import SENTIMENT_NEGATIVE
 from app.services.live_setup import build_pullback_setup
 from app.services.risk import RiskManager
 from app.services.scanner import MarketScanner
@@ -15,6 +16,14 @@ _REGULAR_OPEN = dtime(9, 30)
 # Float/price/volume all drift; nothing re-runs scripts/build_universe.py on a schedule,
 # so this is what actually surfaces staleness instead of it going unnoticed indefinitely.
 STALE_UNIVERSE_DAYS = 45
+# Lesson from Ross Cameron's 2026-08-25 GRML trade (-$8,000): a proposed/registered
+# stock offering (or reverse split, going-concern notice, ...) is a genuine, well-known
+# day-trading risk signal, not noise indistinguishable from an FDA approval - it means
+# dilution is coming, and informed sellers often sell straight into that headline,
+# producing exactly the fast reversal GRML showed. Not a hard block (the pattern can
+# still run hard first, and the strategy's own stop/2R/giveback layers still apply) -
+# halving size is the proportionate response to a real but not certain risk.
+DILUTION_RISK_SIZE_MULTIPLIER = 0.5
 # Extended-hours orders must be LIMIT, not market - a fixed buffer off the reference
 # price gives a realistic shot at filling a fast-moving premarket print without
 # chasing it badly. Same buffer both directions: above the ask for an entry, below the
@@ -598,6 +607,8 @@ class TradingBot:
             qty_by_bankroll = self._qty_within_bankroll(entry_price)
             size_candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
             qty = min(min(size_candidates) if size_candidates else qty_by_capital, qty_by_bankroll)
+            if setup.candidate.news_sentiment == SENTIMENT_NEGATIVE:
+                qty = int(qty * DILUTION_RISK_SIZE_MULTIPLIER)
             if qty < 1:
                 continue
 
@@ -615,6 +626,13 @@ class TradingBot:
             try:
                 self.submit_trade(trade)
                 traded.append(symbol)
+                if setup.candidate.news_sentiment == SENTIMENT_NEGATIVE:
+                    notify.send(
+                        f"{symbol}: dilution-risk catalyst, sized down",
+                        f"{symbol}'s catalyst ({setup.candidate.news_headline or 'see scanner'}) carries dilution "
+                        f"risk - position sized to {int(DILUTION_RISK_SIZE_MULTIPLIER * 100)}% of normal.",
+                        tags="warning",
+                    )
             except ValueError as exc:
                 skipped.append(f"{symbol} ({exc})")
                 continue

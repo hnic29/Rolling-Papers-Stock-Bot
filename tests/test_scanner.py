@@ -368,6 +368,63 @@ def test_live_float_lookup_runs_for_a_symbol_clearing_the_cheap_pillars(monkeypa
     assert response.results[0].score == 5
 
 
+def test_scan_classifies_a_dilution_risk_headline(monkeypatch):
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
+    monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lambda s: 5_000_000)
+    bars = {"GRML": [_bar(10.0, 1_000_000) for _ in range(20)] + [_bar(11.5, 6_000_000)]}
+
+    broker = _mock_broker(bars)
+    broker.latest_news.side_effect = None
+    broker.latest_news.return_value = SimpleNamespace(data={"news": [
+        SimpleNamespace(
+            headline="Company Announces Rare Earth Acquisition and Proposed Public Offering",
+            url="https://example.com/n1",
+            symbols=["GRML"],
+        )
+    ]})
+
+    scanner = MarketScanner()
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        response = scanner.scan(["GRML"])
+
+    result = response.results[0]
+    assert result.has_news is True
+    assert result.news_category == "offering_dilution"
+    assert result.news_sentiment == "negative"
+    assert any("⚠" in reason for reason in result.reasons)
+
+
+def test_realtime_gap_candidates_classifies_news_too(monkeypatch):
+    """The gap lane never checked news at all before this - a stock gapping hard
+    premarket almost always has a real catalyst behind it, and that catalyst's TYPE
+    should be visible the same way it is for the lagged sweep."""
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 0.5)
+    monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lambda s: 900_000)
+
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: ["RCON"])
+    monkeypatch.setattr(scanner, "load_metadata", lambda: {})
+
+    broker = MagicMock()
+    broker.snapshots.return_value = {"RCON": _snapshot(price=6.2, prev_close=3.4, iex_volume=50_000)}
+    broker.daily_bars.side_effect = Exception("bars unavailable this cycle")
+    broker.latest_news.return_value = SimpleNamespace(data={"news": [
+        SimpleNamespace(
+            headline="Recon Technology Lands $1.3 Million Oilfield Services Contract",
+            url="https://example.com/n2",
+            symbols=["RCON"],
+        )
+    ]})
+
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        candidates = scanner.realtime_gap_candidates()
+
+    assert len(candidates) == 1
+    assert candidates[0].has_news is True
+    assert candidates[0].news_category == "contract"
+    assert candidates[0].news_sentiment == "positive"
+
+
 def test_universe_age_days_reads_the_build_date_from_the_header(tmp_path):
     universe_path = tmp_path / "stock_universe.txt"
     universe_path.write_text(

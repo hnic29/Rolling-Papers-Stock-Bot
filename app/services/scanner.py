@@ -7,6 +7,7 @@ from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import ScannerResponse, ScannerResult, Signal, StockCandidate
 from app.paths import resource_path
 from app.services import float_lookup
+from app.services.catalyst import classify_catalyst
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -122,6 +123,8 @@ class MarketScanner:
                 float_shares = float_lookup.float_shares(symbol) or symbol_metadata.get("float_shares")
             else:
                 float_shares = symbol_metadata.get("float_shares")
+            news_headline = latest_news.get("headline") if latest_news else None
+            news_category, news_sentiment = classify_catalyst(news_headline)
             candidate = StockCandidate(
                 symbol=symbol,
                 price=price,
@@ -130,6 +133,9 @@ class MarketScanner:
                 total_volume=total_volume,
                 float_shares=float_shares,
                 has_news=latest_news is not None,
+                news_headline=news_headline,
+                news_category=news_category,
+                news_sentiment=news_sentiment,
                 sector=sector,
                 is_leading_gainer=False,
             )
@@ -152,8 +158,10 @@ class MarketScanner:
                     float_shares=float_shares,
                     sector=sector,
                     has_news=latest_news is not None,
-                    news_headline=latest_news.get("headline") if latest_news else None,
+                    news_headline=news_headline,
                     news_url=latest_news.get("url") if latest_news else None,
+                    news_category=news_category,
+                    news_sentiment=news_sentiment,
                     score=score,
                     signal=signal,
                     reasons=reasons,
@@ -254,6 +262,11 @@ class MarketScanner:
         session_progress = _session_progress_fraction(end)
         today = datetime.now(MARKET_TZ).date()
         metadata = self.load_metadata()
+        # A stock gapping hard premarket almost always has a real catalyst behind it -
+        # "some news event explains the volume and price spike" is one of the five
+        # pillars this whole strategy is built on. The gap lane never checked news at
+        # all before this; only ~25 survivors reach here, so one batched call is cheap.
+        news = self._safe_news(broker, survivors, start=end - timedelta(days=3), end=end)
 
         candidates: list[StockCandidate] = []
         for gap_pct, symbol, price, iex_volume_today in surviving:
@@ -278,6 +291,9 @@ class MarketScanner:
                     total_volume = int(todays_sip[0].volume or 0)
 
             float_shares = float_lookup.float_shares(symbol) or metadata.get(symbol, {}).get("float_shares")
+            symbol_news = news.get(symbol)
+            news_headline = symbol_news.get("headline") if symbol_news else None
+            news_category, news_sentiment = classify_catalyst(news_headline)
             candidates.append(
                 StockCandidate(
                     symbol=symbol,
@@ -286,7 +302,10 @@ class MarketScanner:
                     relative_volume=round(relative_volume, 2),
                     total_volume=total_volume,
                     float_shares=float_shares,
-                    has_news=False,
+                    has_news=symbol_news is not None,
+                    news_headline=news_headline,
+                    news_category=news_category,
+                    news_sentiment=news_sentiment,
                     sector=metadata.get(symbol, {}).get("sector"),
                     is_leading_gainer=True,
                 )
