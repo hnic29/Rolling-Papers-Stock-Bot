@@ -362,9 +362,21 @@ input,
 select {
   border: 1px solid rgba(190, 213, 230, 0.44);
   border-radius: 6px;
+  box-sizing: border-box;
   font: inherit;
   min-height: 40px;
   padding: 0 12px;
+}
+
+/* Buttons size to their own content (a "Start" button shouldn't stretch to fill its
+   row) - only text inputs and selects should fill their container, since they had no
+   width at all otherwise and fell back to the browser's default intrinsic size,
+   refusing to shrink below it inside a grid/flex parent (the same min-width trap
+   fixed elsewhere in this file) and overflowing narrower layouts. */
+input,
+select {
+  min-width: 0;
+  width: 100%;
 }
 
 button {
@@ -832,6 +844,7 @@ form {
 
 .range-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -919,6 +932,23 @@ form {
 
 #candlestick-chart.panning {
   cursor: grabbing;
+}
+
+/* #performance-chart and #backtest-chart draw at a fixed 1040px-wide internal buffer
+   (like the candlestick chart above) but, unlike it, were never told to scale their
+   DISPLAY size to their container - on a narrow viewport the browser rendered the
+   canvas at its full native 1040px, invisibly clipped by body's overflow-x: hidden
+   rather than scrolling, so roughly 70% of the chart was simply unreachable on
+   mobile. Safe to shrink: the mouse-interaction math elsewhere already computes
+   `canvas.width / rect.width` fresh on every use, so it already accounts for the
+   buffer/display-size mismatch this introduces - verified desktop is unaffected too,
+   since every panel there already renders wider than 1040px. */
+#performance-chart,
+#backtest-chart {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  width: 100%;
 }
 
 #candlestick-chart.drawing {
@@ -1092,6 +1122,13 @@ td {
   .grid,
   section.view.active {
     display: block;
+  }
+
+  /* 5 tab buttons (2 with icons) never fit a phone-width row - .tabs had no wrap
+     rule at all, so the row simply overflowed the whole page by ~140px on every
+     single view (found by bisecting body's children until scrollWidth dropped). */
+  .tabs {
+    flex-wrap: wrap;
   }
 
   .actions {
