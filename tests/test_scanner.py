@@ -204,6 +204,43 @@ def test_full_market_sweep_finds_a_qualifying_mover_across_the_whole_market(monk
     assert swept == 6
 
 
+def test_full_market_sweep_ignores_yesterdays_bar_during_the_open_window(monkeypatch):
+    """The "yesterday's ghost" bug: between 9:30 and ~9:46 the lagged feed's latest
+    bar is still YESTERDAY's, so yesterday's +80% runner would sweep in as if it were
+    moving right now and get entry-evaluated on stale conviction. In-session, a
+    latest bar dated a previous day must be skipped - the real-time gap lane owns
+    that window."""
+    from datetime import datetime as real_datetime
+    from zoneinfo import ZoneInfo
+
+    market_tz = ZoneInfo("America/New_York")
+    monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
+
+    yesterday = real_datetime(2026, 8, 24, 16, 0, tzinfo=market_tz)  # the prior session's close
+    stale_bar = SimpleNamespace(close=6.0, volume=5_000_000, timestamp=yesterday)
+    history = [SimpleNamespace(close=5.0, volume=400_000, timestamp=yesterday - timedelta(days=i)) for i in range(20, 0, -1)]
+
+    scanner = MarketScanner()
+    monkeypatch.setattr(scanner, "_tradable_symbols", lambda: ["GHOST"])
+
+    class _FakeDT:
+        @staticmethod
+        def now(tz=None):
+            # Pinned: Tuesday 2026-08-25 9:35 ET - in-session, before today's
+            # consolidated bar exists. Fixed date so the test can't fail on weekends.
+            return real_datetime(2026, 8, 25, 9, 35, tzinfo=market_tz)
+
+    monkeypatch.setattr("app.services.scanner.datetime", _FakeDT)
+
+    broker = MagicMock()
+    broker.daily_bars.return_value = SimpleNamespace(data={"GHOST": history + [stale_bar]})
+    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+        hits, swept = scanner.full_market_sweep()
+
+    assert hits == set()  # yesterday's +20% runner must NOT surface as a live mover
+    assert swept == 1
+
+
 def test_full_market_sweep_survives_a_failed_chunk(monkeypatch):
     monkeypatch.setattr("app.services.scanner._session_progress_fraction", lambda now: 1.0)
     scanner = MarketScanner()

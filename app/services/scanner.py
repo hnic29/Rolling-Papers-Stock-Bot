@@ -340,6 +340,19 @@ class MarketScanner:
                     continue
                 swept += 1
                 latest = symbol_bars[-1]
+                # During market hours, a "latest" bar from a PREVIOUS session means
+                # today's consolidated bar doesn't exist yet (the first ~16 minutes
+                # after the open, where the lagged query window still ends pre-open).
+                # Scoring it would present YESTERDAY's runners as if they're moving
+                # right now - the gap lane owns that window with live data; the sweep
+                # stays honest and silent until its data is today's. Keyed on REAL
+                # wall-clock session time, NOT session_progress: progress is computed
+                # from the lagged timestamp, which reads "pre-open" (1.0) during
+                # exactly this window.
+                now_local = datetime.now(MARKET_TZ)
+                in_session_now = now_local.weekday() < 5 and MARKET_OPEN <= now_local.time() < MARKET_CLOSE
+                if in_session_now and latest.timestamp.astimezone(MARKET_TZ).date() != now_local.date():
+                    continue
                 previous = symbol_bars[-2]
                 price = float(latest.close)
                 if not (self.strategy.preferred_min_price <= price <= self.strategy.preferred_max_price):
