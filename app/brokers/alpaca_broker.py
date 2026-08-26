@@ -8,6 +8,7 @@ from alpaca.trading.requests import (
     GetPortfolioHistoryRequest,
     MarketOrderRequest,
     StopLossRequest,
+    StopOrderRequest,
     TakeProfitRequest,
 )
 from datetime import datetime
@@ -182,6 +183,19 @@ class AlpacaBroker:
 
     def get_order(self, order_id: str):
         return self.client.get_order_by_id(order_id)
+
+    def submit_stop_order(self, symbol: str, qty: float, stop_price: float):
+        """A standalone resting stop-sell - used to move a winning position's protection
+        up to breakeven once it has proven itself (Ross's 'protect the trade' rule),
+        replacing the original entry stop."""
+        order = StopOrderRequest(
+            symbol=symbol.upper(),
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            stop_price=round(stop_price, 2),
+        )
+        return self.client.submit_order(order_data=order)
 
     def open_orders(self, symbol: str):
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol.upper()])

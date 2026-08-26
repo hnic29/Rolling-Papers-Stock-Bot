@@ -148,11 +148,15 @@ def trades_with_pending_exit() -> list[dict]:
 
 
 def open_filled_buys(symbol: str | None = None) -> list[dict]:
-    """Filled buys with no exit recorded or in flight - the rows a closing sell should
-    link back to. Oldest first, so multi-lot positions close FIFO."""
+    """Filled buys whose exit hasn't been CONFIRMED (no realized P&L yet) - the lots a
+    closing sell should link back to, and the ones position management still owns.
+    Deliberately keyed on realized_pnl rather than exit_order_id: a lot with a pending
+    exit link (e.g. a breakeven stop resting after 2R protection) is still open - keying
+    on the link would disarm the giveback layer the moment protection was placed, and a
+    later close's sell would never get linked at all. Oldest first, FIFO."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
-    query = "SELECT * FROM trades WHERE side = 'buy' AND status = 'filled' AND exit_order_id IS NULL"
+    query = "SELECT * FROM trades WHERE side = 'buy' AND status = 'filled' AND realized_pnl IS NULL"
     params: tuple = ()
     if symbol is not None:
         query += " AND symbol = ?"

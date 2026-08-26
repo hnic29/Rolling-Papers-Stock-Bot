@@ -44,6 +44,11 @@ class TradingBot:
         self.scanner = MarketScanner()
         self._trading_day = current_trading_day()
         self._auto_trading_started_at: datetime | None = None
+        # In-memory position-management state; lost on restart, which is safe - peaks
+        # rebuild from the next cycle's price, and re-protecting an already-protected
+        # position just re-places the same breakeven stop.
+        self._position_peaks: dict[str, float] = {}
+        self._protected_positions: set[str] = set()
         self._restore_persisted_state()
 
     def _restore_persisted_state(self) -> None:
@@ -259,14 +264,22 @@ class TradingBot:
                 )
 
     def _manage_open_positions(self, positions: list[dict]) -> list[str]:
-        """This is what actually delivers "winners are held past the first target until
-        an exit indicator fires" (see the reward_note in SmallAccountPullbackStrategy.evaluate):
-        an auto-entered buy only ever rests a stop-loss at the broker, no take-profit, so
-        nothing caps a winner automatically. Every cycle, each held position gets re-checked
-        against the same exit_indicators() a fresh evaluation would use — level-two selling
-        pressure, a topping-tail candle, a red candle — and gets closed the moment one fires.
-        Called from manage_open_positions(), independent of auto_cycle()'s new-entry gates -
-        managing risk that's already open should never depend on those."""
+        """Every cycle, every held position gets three layers of management, in order:
+
+        1. Exit indicators - the same deterioration checks a fresh evaluation would use
+           (topping tail, red candle). Fires -> close at market.
+        2. Profit giveback - once a position has been up 2R (Ross's minimum-target
+           multiple), falling back below +1R closes it. This is what banks a winner
+           instead of riding it all the way back down: EXOD went +$28 unrealized to
+           +$8 realized waiting for a reversal candle alone.
+        3. Breakeven protect - the first time 2R prints, the original entry stop gets
+           replaced with a resting stop at the entry price ("move the stop up toward
+           break-even" - his documented rule). A proven winner can no longer turn into
+           a loss.
+
+        2 and 3 need a defined R, so they only apply to positions whose entry recorded
+        a stop; a stop-less manual buy still gets layer 1. Called from
+        manage_open_positions(), independent of auto_cycle()'s new-entry gates."""
         exited: list[str] = []
         for position in positions:
             symbol = position.get("symbol")
@@ -275,22 +288,56 @@ class TradingBot:
                 continue
             try:
                 setup = build_pullback_setup(symbol, self.scanner)
-                if not self.strategy.exit_indicators(setup):
+                if self.strategy.exit_indicators(setup):
+                    self._close_position(symbol, qty, "exit_signal")
+                    exited.append(symbol)
                     continue
 
-                # An auto-entered position has a stop-loss RESTING at the broker, and
-                # Alpaca holds the shares for that open order - a second sell for the
-                # same shares gets rejected outright ("insufficient qty available").
-                # Cancel every open order on the symbol first or this close never works.
-                self._cancel_open_orders(symbol)
+                entry_rows = trade_log.open_filled_buys(symbol)
+                entry_row = entry_rows[-1] if entry_rows else None
+                current_price = float(position.get("current_price") or 0)
+                if not entry_row or not entry_row.get("stop_loss_price") or not entry_row.get("filled_avg_price") or not current_price:
+                    continue
 
-                # submit_trade links the sell back to the open buy row(s) with this
-                # reason; trade_sync realizes the P&L once the sell fills.
-                self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell), exit_reason="exit_signal")
-                exited.append(symbol)
+                entry = float(entry_row["filled_avg_price"])
+                risk = entry - float(entry_row["stop_loss_price"])
+                if risk <= 0:
+                    continue
+
+                peak = max(self._position_peaks.get(symbol, entry), current_price)
+                self._position_peaks[symbol] = peak
+
+                if peak >= entry + 2 * risk:
+                    if current_price <= entry + risk:
+                        self._close_position(symbol, qty, "giveback")
+                        exited.append(symbol)
+                        continue
+                    if symbol not in self._protected_positions:
+                        # Replace the entry stop with a breakeven stop, and link it so
+                        # trade_sync realizes the exit if THAT stop is what ends up filling.
+                        self._cancel_open_orders(symbol)
+                        broker = AlpacaBroker()
+                        stop_order = broker.submit_stop_order(symbol, qty, entry)
+                        trade_log.record_pending_exit(entry_row["order_id"], str(stop_order.id), "stop")
+                        self._protected_positions.add(symbol)
+                        notify.send(
+                            f"{symbol} hit 2R — protected",
+                            f"{symbol} reached twice its risk; stop moved to breakeven (${entry:,.2f}). Worst case is now a scratch.",
+                            tags="shield",
+                        )
             except Exception:
                 continue  # a single bad symbol/order should never stall managing the rest
+
+        for symbol in exited:
+            self._position_peaks.pop(symbol, None)
+            self._protected_positions.discard(symbol)
         return exited
+
+    def _close_position(self, symbol: str, qty: float, exit_reason: str) -> None:
+        """Cancel anything resting (the original or breakeven stop holds the shares -
+        a second sell would be rejected), then market-close with exit linkage."""
+        self._cancel_open_orders(symbol)
+        self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell), exit_reason=exit_reason)
 
     def _cancel_open_orders(self, symbol: str) -> None:
         broker = AlpacaBroker()

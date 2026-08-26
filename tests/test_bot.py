@@ -671,6 +671,104 @@ def test_manage_open_positions_links_the_exit_back_to_the_buy_row(tmp_path, monk
     assert buy["realized_pnl"] is None  # completed by trade_sync once the sell fills
 
 
+def _open_lot(symbol="RUNR", entry=10.0, stop=9.5, qty=40):
+    """A filled auto-entry lot on the books: entry $10, stop $9.50 -> R = $0.50."""
+    trade_log.record_trade(order_id=f"{symbol}-buy", symbol=symbol, side="buy", qty=qty, status="filled", stop_loss_price=stop)
+    trade_log.update_fill(order_id=f"{symbol}-buy", status="filled", filled_avg_price=entry, filled_qty=qty, filled_at=datetime.now(UTC).isoformat())
+
+
+def test_a_position_reaching_2r_gets_its_stop_moved_to_breakeven(tmp_path, monkeypatch):
+    """Ross's documented rule: once a trade has proven itself, "move the stop up
+    toward break-even" - a proven winner can no longer turn into a loss."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot()  # entry 10.00, R 0.50 -> 2R prints at 11.00
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))  # no exit signal
+
+    stop_order = MagicMock()
+    stop_order.id = "breakeven-stop-1"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_stop_order.return_value = stop_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        exited = bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 11.05}])
+        # Same cycle again - protection must be idempotent, not stack duplicate stops.
+        bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 11.10}])
+
+    assert exited == []  # still holding - protected, not closed
+    MockBroker.return_value.submit_stop_order.assert_called_once_with("RUNR", 40, 10.0)
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "RUNR-buy")
+    assert buy["exit_order_id"] == "breakeven-stop-1"  # linked so trade_sync realizes it if it fills
+    assert buy["exit_reason"] == "stop"
+
+
+def test_a_2r_winner_falling_back_to_1r_is_closed_as_giveback(tmp_path, monkeypatch):
+    """What EXOD exposed: +$28 unrealized decayed to +$8 waiting for a reversal candle
+    alone. Once 2R has printed, falling back below +1R banks the remaining gain."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot()  # entry 10.00, R 0.50: 2R = 11.00, +1R floor = 10.50
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    fake_order = MagicMock()
+    fake_order.id = "giveback-sell-1"
+    fake_order.symbol = "RUNR"
+    fake_order.status = "accepted"
+    stop_order = MagicMock()
+    stop_order.id = "breakeven-stop-1"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.submit_stop_order.return_value = stop_order
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 11.20}])  # peak 2.4R
+        exited = bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 10.45}])  # back under +1R
+
+    assert exited == ["RUNR"]
+    args, _ = MockBroker.return_value.submit_market_order.call_args
+    assert args == ("RUNR", 40, "sell")
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "RUNR-buy")
+    assert buy["exit_reason"] == "giveback"
+
+
+def test_a_position_below_2r_is_left_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot()  # 2R = 11.00
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+        exited = bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 10.60}])  # only +1.2R
+
+    assert exited == []
+    MockBroker.return_value.submit_stop_order.assert_not_called()
+    MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_a_stopless_manual_position_gets_no_2r_management(tmp_path, monkeypatch):
+    """No recorded stop means no defined R - the 2R/giveback layers can't apply, and
+    the position stays under exit-indicator watch only."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    trade_log.record_trade(order_id="m-buy", symbol="MANU", side="buy", qty=10, status="filled")  # no stop
+    trade_log.update_fill(order_id="m-buy", status="filled", filled_avg_price=5.0, filled_qty=10, filled_at=datetime.now(UTC).isoformat())
+    bot = TradingBot()
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+        exited = bot._manage_open_positions([{"symbol": "MANU", "qty": 10, "current_price": 50.0}])  # up 10x, still untouched
+
+    assert exited == []
+    MockBroker.return_value.submit_stop_order.assert_not_called()
+
+
 def test_manage_open_positions_leaves_a_quiet_position_open(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     bot = TradingBot()

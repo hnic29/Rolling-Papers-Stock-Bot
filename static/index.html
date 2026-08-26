@@ -467,15 +467,15 @@
             genuine winner past the first visible resistance level rather than cap it there — a fixed take-profit
             would work against that on purpose.
           </p>
-          <p>Instead, every open position is re-evaluated every automation cycle for real signs the move is over — the same <code>exit_indicators()</code> check a fresh candle would use:</p>
+          <p>Instead, every open position gets <strong>three layers of management</strong>, every cycle:</p>
           <ul class="strategy-check-list">
-            <li>A <strong>topping-tail candle</strong> forms (a long upper wick — buyers pushed it up, sellers rejected it hard)</li>
-            <li>The latest candle <strong>closes red</strong></li>
-            <li>Level-two order flow shows a large seller, a hidden seller, a burst of selling, or buying visibly slowing (see <a href="#strategy-honesty">Limitations</a> — not live-wired yet)</li>
+            <li><strong>Exit indicators</strong> — a topping-tail candle (long upper wick: buyers pushed, sellers rejected hard) or a red close fires an immediate market exit. (Level-two signals — large/hidden sellers, red-tape bursts — are supported in the code but not live-wired; see <a href="#strategy-honesty">Limitations</a>.)</li>
+            <li><strong>Breakeven protection at 2R</strong> — the first time a position is up twice its risk (Ross's minimum-target multiple), the entry stop is replaced with a stop at the entry price: "move the stop up toward break-even." A proven winner can no longer become a loss.</li>
+            <li><strong>Giveback exit</strong> — once 2R has printed, falling back below +1R closes the position and banks what's left, instead of riding the whole gain back down waiting for a reversal candle.</li>
           </ul>
           <p>
-            The instant any of these fires, the bot cancels the resting stop-loss order and submits a market sell —
-            so a winner can run indefinitely, but the moment real deterioration shows up, it's out.
+            So a winner can still run indefinitely — but past 2R its worst case is breakeven, past 2R-then-fade its
+            worst case is roughly +1R, and the moment real deterioration shows, it's out.
           </p>
           <p class="chart-hint">
             This monitoring runs on <strong>every</strong> open position, every cycle, regardless of how it was opened (auto or manual) and regardless of whether Auto-Trading is currently switched on — see <a href="#strategy-states">Bot States</a>.

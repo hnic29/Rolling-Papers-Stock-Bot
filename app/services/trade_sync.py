@@ -16,6 +16,8 @@ _EXIT_REASON_LABELS = {
     "target": "hit its profit target",
     "stop": "hit its stop loss",
     "exit_signal": "closed on an exit signal",
+    "giveback": "gave back its gain past the protect level",
+    "manual_close": "was closed manually",
 }
 
 
