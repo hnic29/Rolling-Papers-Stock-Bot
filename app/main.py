@@ -333,6 +333,12 @@ def resume_day():
     return bot.resume_day()
 
 
+@app.post("/api/automation/trades-today", response_model=BotStatus)
+def correct_trades_today(count: int):
+    """Manual bookkeeping correction - see TradingBot.correct_trades_today."""
+    return bot.correct_trades_today(count)
+
+
 @app.post("/api/scanner")
 def scan_market(request: ScannerRequest):
     try:

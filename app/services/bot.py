@@ -418,6 +418,18 @@ class TradingBot:
         self._persist_state()
         return self.status
 
+    def correct_trades_today(self, count: int) -> BotStatus:
+        """Manual bookkeeping correction for trades_today - built for the 2026-08-26
+        duplicate-order incident, where a single bug-triggered situation (BRNX's limit
+        buy re-submitted every cycle) consumed 5 of 5 daily slots for what was really
+        one intended, now fully-cancelled-and-unfilled entry attempt. The daily cap
+        exists to bound genuine risk-taking, not to be exhausted by a bug's duplicate
+        submissions of an order that never held a single share."""
+        self.refresh_status()
+        self.status.trades_today = max(0, count)
+        self._persist_state()
+        return self.status
+
     def resume_day(self) -> BotStatus:
         """Explicit manual override that clears a walk-away for the rest of today. The
         stickiness is deliberate (coming back after walking away is the FOMO trap the

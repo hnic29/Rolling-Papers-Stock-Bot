@@ -412,6 +412,24 @@ def test_resume_day_clears_a_walk_away_and_survives_a_restart(monkeypatch, tmp_p
     assert TradingBot().status.walked_away_for_day is False  # persisted, not just in-memory
 
 
+def test_correct_trades_today_persists_and_floors_at_zero(monkeypatch, tmp_path):
+    """The 2026-08-26 duplicate-order bug ate all 5 daily slots on one bug-triggered,
+    fully-cancelled-and-unfilled entry attempt - this is the bookkeeping correction,
+    not a way to bypass the cap for real trading days."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    bot = TradingBot()
+    bot.status.trades_today = 5
+    bot._persist_state()
+
+    bot.correct_trades_today(0)
+
+    assert bot.status.trades_today == 0
+    assert TradingBot().status.trades_today == 0  # persisted, not just in-memory
+
+    bot.correct_trades_today(-3)
+    assert bot.status.trades_today == 0  # floors at zero, never negative
+
+
 def test_auto_cycle_stays_paused_once_walked_away_for_the_day(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
 
