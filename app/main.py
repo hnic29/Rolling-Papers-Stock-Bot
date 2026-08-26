@@ -55,6 +55,7 @@ async def _automation_loop() -> None:
     while True:
         try:
             await asyncio.to_thread(_sync_orders_headless)
+            await asyncio.to_thread(bot.check_market_open_close_notifications)
             await asyncio.to_thread(bot.manage_open_positions)
             if bot.status.auto_trading_enabled:
                 await asyncio.to_thread(bot.auto_cycle)

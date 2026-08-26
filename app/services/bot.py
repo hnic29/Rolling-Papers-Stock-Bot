@@ -55,6 +55,10 @@ class TradingBot:
         # position just re-places the same breakeven stop.
         self._position_peaks: dict[str, float] = {}
         self._protected_positions: set[str] = set()
+        # None = "unknown yet" - the first check after any startup/restart just primes
+        # this rather than firing, so a routine deploy mid-session never sends a false
+        # "market opened" notification.
+        self._last_known_market_open: bool | None = None
         self._restore_persisted_state()
 
     def _restore_persisted_state(self) -> None:
@@ -640,6 +644,41 @@ class TradingBot:
             )
 
         return self.status
+
+    def check_market_open_close_notifications(self) -> None:
+        """Fires a push notification exactly once on each regular-session open/close
+        transition (9:30 AM / 4:00 PM ET) - not premarket, since those are the moments
+        someone watching for the day actually cares about. Called from the automation
+        loop every cycle regardless of auto-trading being on or the market currently
+        being open, so it fires reliably even while idle."""
+        try:
+            broker = AlpacaBroker()
+            is_open = broker.client.get_clock().is_open
+        except Exception:
+            return  # a clock hiccup shouldn't spam notifications either way
+
+        previous = self._last_known_market_open
+        self._last_known_market_open = is_open
+        if previous is None or previous == is_open:
+            return  # first check after startup just primes state; no change, no notification
+
+        if is_open:
+            notify.send(
+                "Market is open",
+                f"Regular trading hours have started (9:30 AM ET). Auto-trading is "
+                f"{'on' if self.status.auto_trading_enabled else 'off'}.",
+                tags="bell",
+            )
+        else:
+            realized_today = trade_log.todays_realized_trades(self._trading_day)
+            pnl = sum(t["realized_pnl"] or 0.0 for t in realized_today)
+            sign = "+" if pnl >= 0 else "-"
+            notify.send(
+                "Market is closed",
+                f"Regular trading hours have ended (4:00 PM ET). Today: {len(realized_today)} trade(s) "
+                f"closed, {sign}${abs(pnl):,.2f} realized.",
+                tags="chart_with_upwards_trend" if pnl >= 0 else "chart_with_downwards_trend",
+            )
 
     def manage_open_positions(self) -> BotStatus:
         """Watches every currently-held position for a real exit signal and closes it if

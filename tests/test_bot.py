@@ -1122,6 +1122,68 @@ def test_tripping_a_walk_away_sends_a_high_priority_notification(tmp_path, monke
     assert len(sent) == 1
 
 
+def test_market_open_close_notifications_prime_silently_on_first_check(tmp_path, monkeypatch):
+    """A routine restart mid-session must never fire a false 'market opened' the
+    instant the process comes back up - the first check after startup only primes
+    the known-state, it never notifies."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    sent = []
+    monkeypatch.setattr("app.services.bot.notify.send", lambda *a, **kw: sent.append(a))
+
+    bot = TradingBot()
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        bot.check_market_open_close_notifications()
+
+    assert sent == []
+    assert bot._last_known_market_open is True
+
+
+def test_market_open_close_notifications_fire_on_each_transition(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    sent = []
+    monkeypatch.setattr(
+        "app.services.bot.notify.send",
+        lambda title, message, **kw: sent.append((title, message)),
+    )
+
+    bot = TradingBot()
+    bot._last_known_market_open = False  # already primed, as if the bot has been running a while
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        bot.check_market_open_close_notifications()  # closed -> open
+
+    assert len(sent) == 1
+    assert sent[0][0] == "Market is open"
+
+    _record_realized_trade("mc1", 12.5, datetime.now(UTC))
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        bot.check_market_open_close_notifications()  # open -> closed
+
+    assert len(sent) == 2
+    assert sent[1][0] == "Market is closed"
+    assert "1 trade(s) closed" in sent[1][1]
+    assert "+$12.50" in sent[1][1]
+
+
+def test_market_open_close_notifications_stay_silent_with_no_transition(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    sent = []
+    monkeypatch.setattr("app.services.bot.notify.send", lambda *a, **kw: sent.append(a))
+
+    bot = TradingBot()
+    bot._last_known_market_open = True
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        bot.check_market_open_close_notifications()
+        bot.check_market_open_close_notifications()
+
+    assert sent == []  # still open both times - nothing changed, nothing to say
+
+
 def test_refresh_status_reflects_a_runtime_paper_mode_change(tmp_path, monkeypatch):
     """Settings saves take effect without a restart, but status.paper was only set at
     construction - so after switching to live mode the dashboard's Mode field kept

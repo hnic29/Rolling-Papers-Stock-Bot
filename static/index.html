@@ -502,6 +502,7 @@
           <p>While the bot process is running, this sequence repeats every 60 seconds, every step independent of the others failing:</p>
           <ol class="strategy-cycle-list">
             <li><strong>Sync</strong> — reconcile every pending order and open exit against Alpaca's real fill data. This runs headless, with or without the dashboard open.</li>
+            <li><strong>Notify on open/close</strong> — a phone push exactly once when the regular session starts (9:30 AM ET) and once when it ends (4:00 PM ET, with a same-day P&amp;L recap). Runs every day automatically, independent of Auto-Trading being on.</li>
             <li><strong>Manage open positions</strong> — check every held position for an exit indicator, close if one fired. <em>Runs unconditionally</em>, even with Auto-Trading off.</li>
             <li><strong>Stop here if Auto-Trading is off.</strong> Nothing below this line runs.</li>
             <li>Check the market is actually open (Alpaca's own clock) OR the premarket window (7:00–9:30 AM ET by default)</li>
