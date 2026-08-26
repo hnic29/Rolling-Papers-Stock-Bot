@@ -460,6 +460,17 @@ def trade(request: TradeRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/orders/{symbol}/cancel")
+def cancel_orders(symbol: str):
+    """Manual escape hatch: cancel every resting order on a symbol. Built for the
+    duplicate-premarket-order bug (2026-08-26) - an unfilled limit buy doesn't show up
+    in positions_as_dicts(), so auto_cycle's held_symbols check didn't see it and kept
+    re-submitting a fresh entry every cycle. That's fixed at the source now, but this
+    stays as a general-purpose way to clear stuck orders by hand."""
+    bot._cancel_open_orders(symbol)
+    return {"symbol": symbol.upper(), "message": "Cancel requested for all open orders on this symbol."}
+
+
 @app.post("/api/backtest")
 def backtest(request: BacktestRequest):
     try:

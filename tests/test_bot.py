@@ -194,6 +194,7 @@ def test_auto_cycle_skips_when_market_is_closed(monkeypatch, tmp_path):
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: False)  # neither regular hours nor premarket
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
@@ -303,6 +304,7 @@ def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_pa
     bot.status.auto_trading_enabled = True
     bot._auto_trading_started_at = datetime.now(UTC) - timedelta(minutes=10)
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: False)  # neither regular hours nor premarket
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
@@ -581,6 +583,32 @@ def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
         bot.auto_cycle()
 
     MockBroker.return_value.submit_market_order.assert_not_called()
+
+
+def test_auto_cycle_does_not_stack_a_duplicate_order_on_an_unfilled_pending_buy(monkeypatch, tmp_path):
+    """Live incident, 2026-08-26 premarket: BRNX's limit buy sat unfilled ("new"),
+    never appeared in positions_as_dicts() (unfilled orders aren't positions), and the
+    same BRNX candidate re-qualified every cycle - 5 duplicate buy orders stacked up
+    before this check existed, one every ~90 seconds. A pending (non-terminal) buy
+    order must block re-entry exactly like an already-held position does."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    trade_log.record_trade(order_id="brnx-pending-1", symbol="BRNX", side="buy", qty=72, status="new", stop_loss_price=5.4)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("BRNX")]))
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []  # unfilled - not a position yet
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+    MockBroker.return_value.submit_market_order.assert_not_called()
+    MockBroker.return_value.submit_extended_hours_limit_order.assert_not_called()
 
 
 def test_auto_cycle_flags_a_stale_universe_in_its_status_message(monkeypatch, tmp_path):

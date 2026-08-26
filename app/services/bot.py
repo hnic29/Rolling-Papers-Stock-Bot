@@ -481,6 +481,16 @@ class TradingBot:
         except Exception:
             held_symbols = set()
 
+        # A resting, unfilled buy order (routine in premarket - a limit fill can take
+        # minutes) does NOT show up in positions_as_dicts() at all - without this, the
+        # same symbol re-qualifies every cycle and stacks a fresh duplicate order on
+        # top of the one already resting. See trade_log.pending_buy_symbols for the
+        # live incident this fixes.
+        try:
+            held_symbols |= trade_log.pending_buy_symbols()
+        except Exception:
+            pass  # a lookup failure here should never block managing what we DO know about
+
         self._update_session_state()
         if self.status.walked_away_for_day:
             self.status.last_message = f"Auto-trading paused for new entries — {self.status.walk_away_reason}"

@@ -230,6 +230,25 @@ def todays_submitted_trades(trading_day: date) -> list[dict]:
     return result
 
 
+def pending_buy_symbols() -> set[str]:
+    """Symbols with a buy order submitted but not yet in a terminal state (filled,
+    canceled, rejected, expired) - i.e. still resting at the broker. An unfilled limit
+    order (routine in premarket, where a fill can take minutes) doesn't show up in
+    Alpaca's positions endpoint at all - without this, the same symbol re-qualifies
+    every automation cycle and gets a FRESH duplicate order stacked on top of the one
+    already resting. Found live on 2026-08-26: BRNX stacked to 5 simultaneous unfilled
+    buy orders, every ~90 seconds, before this existed - a real risk of several
+    crossing and filling at once for several times the intended position size."""
+    conn = _connect()
+    placeholders = ",".join("?" * len(TERMINAL_STATUSES))
+    rows = conn.execute(
+        f"SELECT DISTINCT symbol FROM trades WHERE side = 'buy' AND status NOT IN ({placeholders})",
+        tuple(TERMINAL_STATUSES),
+    ).fetchall()
+    conn.close()
+    return {row[0] for row in rows}
+
+
 def pending_order_ids() -> list[str]:
     conn = _connect()
     placeholders = ",".join("?" * len(TERMINAL_STATUSES))
