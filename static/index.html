@@ -504,13 +504,18 @@
             <li><strong>Sync</strong> — reconcile every pending order and open exit against Alpaca's real fill data. This runs headless, with or without the dashboard open.</li>
             <li><strong>Manage open positions</strong> — check every held position for an exit indicator, close if one fired. <em>Runs unconditionally</em>, even with Auto-Trading off.</li>
             <li><strong>Stop here if Auto-Trading is off.</strong> Nothing below this line runs.</li>
-            <li>Check the market is actually open (Alpaca's own clock, not a guess)</li>
+            <li>Check the market is actually open (Alpaca's own clock) OR the premarket window (7:00–9:30 AM ET by default)</li>
             <li>Check today's walk-away state — new entries pause if already tripped</li>
-            <li>Check the trading window (9:30 AM – 4:00 PM ET)</li>
+            <li>Check the trading window (9:30 AM – 4:00 PM ET, skipped during premarket)</li>
             <li>Check the bankroll has anything available to trade</li>
             <li><strong>Scan</strong> the universe, score every symbol, rank by score</li>
-            <li>For each qualifying candidate not already held, run the full entry pattern check and submit a sized buy if it triggers</li>
+            <li>For each qualifying candidate not already held, run the full entry pattern check and submit a sized buy if it triggers — a <strong>market</strong> order with a bracket stop during regular hours, or a <strong>limit</strong> order with no bracket during premarket (Alpaca disallows both outside 9:30–16:00)</li>
           </ol>
+          <p class="chart-hint">
+            A premarket fill holds <strong>no broker-side stop</strong> until regular hours opens and one gets armed automatically —
+            exit-indicator monitoring (step 2) is its only protection until then. This exists because Ross Cameron's entire
+            2026-08-25 P&amp;L happened 7:00–9:30 AM, fully resolved before a regular-hours-only bot would ever look.
+          </p>
         </article>
 
         <article class="panel strategy-panel" id="strategy-states">

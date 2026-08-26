@@ -11,9 +11,15 @@ from app.services.scanner import MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
 MARKET_TZ = ZoneInfo("America/New_York")
+_REGULAR_OPEN = dtime(9, 30)
 # Float/price/volume all drift; nothing re-runs scripts/build_universe.py on a schedule,
 # so this is what actually surfaces staleness instead of it going unnoticed indefinitely.
 STALE_UNIVERSE_DAYS = 45
+# Extended-hours orders must be LIMIT, not market - a fixed buffer off the reference
+# price gives a realistic shot at filling a fast-moving premarket print without
+# chasing it badly. Same buffer both directions: above the ask for an entry, below the
+# last price for an exit that needs to get out, not get the best possible print.
+PREMARKET_LIMIT_BUFFER_PCT = 0.5
 
 
 def current_trading_day() -> date:
@@ -195,6 +201,12 @@ class TradingBot:
         local_time = now.astimezone(MARKET_TZ).time()
         return _parse_clock(settings.trading_window_start) <= local_time <= _parse_clock(settings.trading_window_end)
 
+    def _in_premarket_window(self, now: datetime) -> bool:
+        local = now.astimezone(MARKET_TZ)
+        if local.weekday() >= 5:
+            return False
+        return _parse_clock(settings.premarket_window_start) <= local.time() < _REGULAR_OPEN
+
     def _update_session_state(self) -> None:
         """Reconcile today's realized trades against the daily walk-away rules from the
         strategy research: stop once roughly half the day's peak profit has been given
@@ -263,39 +275,50 @@ class TradingBot:
                     tags="octagonal_sign",
                 )
 
-    def _manage_open_positions(self, positions: list[dict]) -> list[str]:
-        """Every cycle, every held position gets three layers of management, in order:
+    def _manage_open_positions(self, positions: list[dict], regular_hours: bool = True) -> list[str]:
+        """Every cycle, every held position gets management, in order:
 
+        0. Arm a missing stop - a premarket-filled lot holds NO broker-side stop at all
+           (Alpaca disallows stop orders outside 9:30-16:00). The moment regular hours
+           opens, place the stop that was recorded at entry but never could rest until
+           now. Regular-hours-only, since it would just be rejected otherwise.
         1. Exit indicators - the same deterioration checks a fresh evaluation would use
-           (topping tail, red candle). Fires -> close at market.
+           (topping tail, red candle). Fires -> close. During premarket this is the
+           ONLY protection a position has - exactly the gap Ross's RCON (+213% then a
+           full round-trip red, entirely premarket) exposed.
         2. Profit giveback - once a position has been up 2R (Ross's minimum-target
            multiple), falling back below +1R closes it. This is what banks a winner
            instead of riding it all the way back down: EXOD went +$28 unrealized to
            +$8 realized waiting for a reversal candle alone.
         3. Breakeven protect - the first time 2R prints, the original entry stop gets
            replaced with a resting stop at the entry price ("move the stop up toward
-           break-even" - his documented rule). A proven winner can no longer turn into
-           a loss.
+           break-even" - his documented rule). Regular-hours-only for the same reason
+           as layer 0 - a stop order can't be placed premarket at all.
 
         2 and 3 need a defined R, so they only apply to positions whose entry recorded
         a stop; a stop-less manual buy still gets layer 1. Called from
         manage_open_positions(), independent of auto_cycle()'s new-entry gates."""
+        extended_hours = not regular_hours
         exited: list[str] = []
         for position in positions:
             symbol = position.get("symbol")
             qty = position.get("qty")
+            current_price = float(position.get("current_price") or 0)
             if not symbol or not qty:
                 continue
             try:
+                if regular_hours:
+                    self._arm_missing_stop(symbol, qty)
+
                 setup = build_pullback_setup(symbol, self.scanner)
                 if self.strategy.exit_indicators(setup):
-                    self._close_position(symbol, qty, "exit_signal")
+                    exit_limit = round(current_price * (1 - PREMARKET_LIMIT_BUFFER_PCT / 100), 2) if extended_hours and current_price else None
+                    self._close_position(symbol, qty, "exit_signal", extended_hours=extended_hours, limit_price=exit_limit)
                     exited.append(symbol)
                     continue
 
                 entry_rows = trade_log.open_filled_buys(symbol)
                 entry_row = entry_rows[-1] if entry_rows else None
-                current_price = float(position.get("current_price") or 0)
                 if not entry_row or not entry_row.get("stop_loss_price") or not entry_row.get("filled_avg_price") or not current_price:
                     continue
 
@@ -309,12 +332,16 @@ class TradingBot:
 
                 if peak >= entry + 2 * risk:
                     if current_price <= entry + risk:
-                        self._close_position(symbol, qty, "giveback")
+                        exit_limit = round(current_price * (1 - PREMARKET_LIMIT_BUFFER_PCT / 100), 2) if extended_hours else None
+                        self._close_position(symbol, qty, "giveback", extended_hours=extended_hours, limit_price=exit_limit)
                         exited.append(symbol)
                         continue
-                    if symbol not in self._protected_positions:
+                    if regular_hours and symbol not in self._protected_positions:
                         # Replace the entry stop with a breakeven stop, and link it so
                         # trade_sync realizes the exit if THAT stop is what ends up filling.
+                        # Regular-hours-only - a stop order can't be placed premarket at
+                        # all, so a position that hits 2R before 9:30 simply stays on
+                        # layer 1 (exit indicators) until the open can arm this.
                         self._cancel_open_orders(symbol)
                         broker = AlpacaBroker()
                         stop_order = broker.submit_stop_order(symbol, qty, entry)
@@ -333,11 +360,47 @@ class TradingBot:
             self._protected_positions.discard(symbol)
         return exited
 
-    def _close_position(self, symbol: str, qty: float, exit_reason: str) -> None:
+    def _arm_missing_stop(self, symbol: str, qty: float) -> None:
+        """A premarket-filled lot has a recorded stop_loss_price but nothing resting at
+        the broker (extended hours disallows stop orders entirely) - the first regular-
+        hours cycle arms it. Also self-heals a bracket stop leg missing for any other
+        reason. Assumes any OTHER open order on the symbol already IS that protection
+        (true for this bot's own order patterns: a position only ever has its own
+        resting stop, or nothing) - skip rather than risk a duplicate."""
+        entry_rows = trade_log.open_filled_buys(symbol)
+        entry_row = entry_rows[-1] if entry_rows else None
+        if not entry_row or not entry_row.get("stop_loss_price"):
+            return
+        broker = AlpacaBroker()
+        try:
+            if broker.open_orders(symbol):
+                return
+        except Exception:
+            return
+        stop_price = float(entry_row["stop_loss_price"])
+        stop_order = broker.submit_stop_order(symbol, qty, stop_price)
+        trade_log.record_pending_exit(entry_row["order_id"], str(stop_order.id), "stop")
+        notify.send(
+            f"{symbol} stop armed",
+            f"Regular hours opened — resting stop placed at ${stop_price:,.2f} for the position "
+            "opened premarket, which had no broker-side protection until now.",
+            tags="shield",
+        )
+
+    def _close_position(
+        self, symbol: str, qty: float, exit_reason: str, extended_hours: bool = False, limit_price: float | None = None
+    ) -> None:
         """Cancel anything resting (the original or breakeven stop holds the shares -
-        a second sell would be rejected), then market-close with exit linkage."""
+        a second sell would be rejected), then close with exit linkage. extended_hours
+        routes through a LIMIT sell (market orders are rejected outside 9:30-16:00) at
+        a small buffer below the current price - accepting a slightly worse fill for a
+        real chance of actually getting out."""
         self._cancel_open_orders(symbol)
-        self.submit_trade(TradeRequest(symbol=symbol, qty=qty, side=Signal.sell), exit_reason=exit_reason)
+        trade = TradeRequest(
+            symbol=symbol, qty=qty, side=Signal.sell,
+            extended_hours=extended_hours, estimated_price=limit_price if extended_hours else None,
+        )
+        self.submit_trade(trade, exit_reason=exit_reason)
 
     def _cancel_open_orders(self, symbol: str) -> None:
         broker = AlpacaBroker()
@@ -405,7 +468,11 @@ class TradingBot:
             self.status.last_message = f"Automation could not check the market clock: {exc}"
             return self.status
 
-        if not clock.is_open:
+        regular_hours = clock.is_open
+        # Ross's real trading window opens well before 9:30 - see PREMARKET_LIMIT_BUFFER_PCT's
+        # comment for why this is opt-out, not opt-in.
+        premarket = (not regular_hours) and settings.premarket_trading_enabled and self._in_premarket_window(datetime.now(UTC))
+        if not regular_hours and not premarket:
             self.status.last_message = "Auto-trading idle — market is closed"
             return self.status
 
@@ -419,7 +486,10 @@ class TradingBot:
             self.status.last_message = f"Auto-trading paused for new entries — {self.status.walk_away_reason}"
             return self.status
 
-        if not self._within_trading_window(datetime.now(UTC)):
+        # trading_window_start/end is a REGULAR-hours-only setting - premarket has its
+        # own separate window (settings.premarket_window_start-9:30), already checked
+        # above, so this check doesn't apply to a premarket cycle.
+        if not premarket and not self._within_trading_window(datetime.now(UTC)):
             self.status.last_message = (
                 f"Auto-trading idle — outside the {settings.trading_window_start}-{settings.trading_window_end} trading window"
             )
@@ -478,16 +548,28 @@ class TradingBot:
             if decision.signal != Signal.buy:
                 continue
 
+            # Premarket: extended_hours=True routes this through a LIMIT order (Alpaca
+            # rejects market orders and bracket legs outside 9:30-16:00) at a small
+            # buffer above the proposed entry - stop_loss_price is still recorded so
+            # OUR OWN 2R/exit tracking has a defined R, even though the broker holds no
+            # resting stop until _arm_missing_stop places one at the regular-hours open.
+            # Sizing below is computed against THIS price, not the unbuffered
+            # proposed_entry - otherwise the buffer alone can push a position's real
+            # notional value past the position-value cap the qty was sized to respect.
+            entry_price = (
+                round(setup.proposed_entry * (1 + PREMARKET_LIMIT_BUFFER_PCT / 100), 2) if premarket else setup.proposed_entry
+            )
+
             # Percentages of the current bankroll, not fixed dollars - see app.config's
             # comment on risk_per_trade_pct for why.
             current_bankroll = bankroll.current_bankroll()
             risk_dollars = current_bankroll * settings.risk_per_trade_pct / 100
             position_value_dollars = current_bankroll * settings.max_position_value_pct / 100
 
-            risk_per_share = setup.proposed_entry - setup.proposed_stop
+            risk_per_share = entry_price - setup.proposed_stop
             qty_by_risk = int(risk_dollars // risk_per_share) if risk_per_share > 0 else 0
-            qty_by_capital = int(position_value_dollars // setup.proposed_entry)
-            qty_by_bankroll = self._qty_within_bankroll(setup.proposed_entry)
+            qty_by_capital = int(position_value_dollars // entry_price)
+            qty_by_bankroll = self._qty_within_bankroll(entry_price)
             size_candidates = [q for q in (qty_by_risk, qty_by_capital) if q > 0]
             qty = min(min(size_candidates) if size_candidates else qty_by_capital, qty_by_bankroll)
             if qty < 1:
@@ -500,8 +582,9 @@ class TradingBot:
                 symbol=symbol,
                 qty=qty,
                 side=Signal.buy,
-                estimated_price=setup.proposed_entry,
+                estimated_price=entry_price,
                 stop_loss_price=setup.proposed_stop,
+                extended_hours=premarket,
             )
             try:
                 self.submit_trade(trade)
@@ -541,7 +624,13 @@ class TradingBot:
         one fires - runs every automation cycle regardless of whether new-entry
         auto-trading is switched on (see app.main's automation loop). This is the only
         thing protecting a position that doesn't have its own broker-side stop-loss, e.g.
-        a manual order placed without one - it has no other safety net."""
+        a manual order placed without one - it has no other safety net.
+
+        Also runs during premarket, not just regular hours: a premarket-filled position
+        holds NO broker-side stop at all (Alpaca disallows stop orders outside 9:30-16:00),
+        so exit-indicator monitoring is its ONLY protection until the regular-hours open
+        arms a real stop - a real pattern this exists for: Ross's RCON position on
+        2026-08-25 spiked +213% then fully round-tripped red, entirely premarket."""
         self.refresh_status()
         try:
             broker = AlpacaBroker()
@@ -551,7 +640,9 @@ class TradingBot:
         except Exception:
             return self.status
 
-        if not clock.is_open:
+        regular_hours = clock.is_open
+        premarket = (not regular_hours) and settings.premarket_trading_enabled and self._in_premarket_window(datetime.now(UTC))
+        if not regular_hours and not premarket:
             return self.status
 
         try:
@@ -559,7 +650,7 @@ class TradingBot:
         except Exception:
             held_positions = []
 
-        exited = self._manage_open_positions(held_positions)
+        exited = self._manage_open_positions(held_positions, regular_hours=regular_hours)
         if exited:
             self.status.last_message = f"Closed {', '.join(exited)} on an exit signal"
         return self.status
@@ -571,13 +662,20 @@ class TradingBot:
             self._validate_against_bankroll(trade)
         try:
             broker = AlpacaBroker()
-            order = broker.submit_market_order(
-                trade.symbol,
-                trade.qty,
-                trade.side.value,
-                take_profit_price=trade.take_profit_price,
-                stop_loss_price=trade.stop_loss_price,
-            )
+            if trade.extended_hours:
+                if not trade.estimated_price:
+                    raise ValueError("Extended-hours orders require a limit price")
+                order = broker.submit_extended_hours_limit_order(
+                    trade.symbol, trade.qty, trade.side.value, trade.estimated_price
+                )
+            else:
+                order = broker.submit_market_order(
+                    trade.symbol,
+                    trade.qty,
+                    trade.side.value,
+                    take_profit_price=trade.take_profit_price,
+                    stop_loss_price=trade.stop_loss_price,
+                )
         except BrokerUnavailable as exc:
             raise ValueError(str(exc)) from exc
 

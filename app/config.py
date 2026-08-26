@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # actually shows up instead of only in a 30-minute window each day.
     trading_window_start: str = "09:30"
     trading_window_end: str = "16:00"
+    # Ross Cameron's real trading window opens well before the bell (his 2026-08-25
+    # session's entire P&L - RCON +$17k, GRML -$8k, DAIC, AMIX - happened 7:00-9:30 ET,
+    # fully resolved by the open). Extended-hours orders are LIMIT-only (Alpaca
+    # disallows market orders and bracket/stop legs outside 9:30-16:00), so premarket
+    # entries carry real execution risk a regular-hours market order doesn't - opt-out,
+    # not opt-in, is deliberate given that tradeoff.
+    premarket_trading_enabled: bool = True
+    premarket_window_start: str = "07:00"
     max_daily_giveback_pct: float = 50.0
     max_consecutive_losses: int = 3
     max_minutes_without_trade: int = 60

@@ -33,6 +33,10 @@ class TradeRequest(BaseModel):
     estimated_price: float | None = None
     stop_loss_price: float | None = None
     take_profit_price: float | None = None
+    # Extended-hours (premarket/after-hours) order: Alpaca requires a LIMIT order with
+    # no bracket legs, using estimated_price as the limit price - a market order or a
+    # bracket (stop/target) is rejected outright outside 9:30-16:00 ET.
+    extended_hours: bool = False
 
 
 class Candle(BaseModel):

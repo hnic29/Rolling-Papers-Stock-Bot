@@ -5,7 +5,7 @@ import pytest
 
 from app.models import Candle, PullbackSetup, ScannerResponse, ScannerResult, Signal, StockCandidate, StrategyDecision, TradeRequest
 from app.services import bankroll, bot_state, trade_log
-from app.services.bot import STALE_UNIVERSE_DAYS, TradingBot, current_trading_day
+from app.services.bot import PREMARKET_LIMIT_BUFFER_PCT, STALE_UNIVERSE_DAYS, TradingBot, current_trading_day
 
 
 @pytest.fixture(autouse=True)
@@ -518,6 +518,46 @@ def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypat
 
         args, _ = MockBroker.return_value.submit_market_order.call_args
         assert args[1] == 3  # int(15.0 // 5.0), not whatever risk/capital sizing alone would pick
+
+
+def test_premarket_sizing_respects_the_position_cap_against_the_buffered_limit_price(tmp_path, monkeypatch):
+    """Regression: qty used to be sized against the unbuffered proposed_entry, then the
+    order was placed at proposed_entry PLUS the premarket buffer - a boundary case
+    (qty=4000 @ $5.00 = exactly the $20,000 cap, but @ the buffered $5.03 = $20,120,
+    over it) that risk.validate correctly rejected, silently dropping the trade to
+    "skipped" with no order ever submitted. Sizing must use the buffered price."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 100_000.0)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda: 100_000.0)  # 20% cap = $20,000
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+    monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [
+        StockCandidate(symbol="RCON", price=5.0, percent_change=90.0, relative_volume=30.0, total_volume=0, float_shares=700_000, is_leading_gainer=True)
+    ])
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))  # proposed_entry 5.0
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.5))
+
+    fake_order = MagicMock()
+    fake_order.id = "premarket-sizing-1"
+    fake_order.symbol = "RCON"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        status = bot.auto_cycle()
+
+    assert "skipped" not in status.last_message.lower()
+    args, _ = MockBroker.return_value.submit_extended_hours_limit_order.call_args
+    _, qty, _, limit_price = args
+    assert round(qty * limit_price, 2) <= 20_000.0  # inside the 20% position-value cap
 
 
 def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
@@ -1062,3 +1102,195 @@ def test_running_flag_also_survives_a_restart(tmp_path, monkeypatch):
     second = TradingBot()
 
     assert second.status.running is True
+
+
+# --- Premarket trading -------------------------------------------------------
+# Built 2026-08-26 after discovering Ross Cameron's entire 2026-08-25 P&L (RCON
+# +$17k, GRML -$8k, DAIC, AMIX) happened 7:00-9:30 ET, fully resolved before a
+# regular-hours-only bot would ever look. Rollback bookmark: commit 574b781.
+
+def test_in_premarket_window_true_between_7am_and_930am_on_a_weekday(monkeypatch):
+    monkeypatch.setattr("app.config.settings.premarket_window_start", "07:00")
+    bot = TradingBot()
+    tuesday_730am_et = datetime(2026, 8, 25, 11, 30, tzinfo=UTC)  # 7:30 ET (EDT, UTC-4)
+    assert bot._in_premarket_window(tuesday_730am_et) is True
+
+
+def test_in_premarket_window_false_before_the_window_starts(monkeypatch):
+    monkeypatch.setattr("app.config.settings.premarket_window_start", "07:00")
+    bot = TradingBot()
+    tuesday_6am_et = datetime(2026, 8, 25, 10, 0, tzinfo=UTC)  # 6:00 ET
+    assert bot._in_premarket_window(tuesday_6am_et) is False
+
+
+def test_in_premarket_window_false_once_regular_hours_opens(monkeypatch):
+    monkeypatch.setattr("app.config.settings.premarket_window_start", "07:00")
+    bot = TradingBot()
+    tuesday_930am_et = datetime(2026, 8, 25, 13, 30, tzinfo=UTC)  # 9:30 ET exactly
+    assert bot._in_premarket_window(tuesday_930am_et) is False
+
+
+def test_in_premarket_window_false_on_a_weekend(monkeypatch):
+    monkeypatch.setattr("app.config.settings.premarket_window_start", "07:00")
+    bot = TradingBot()
+    saturday_730am_et = datetime(2026, 8, 29, 11, 30, tzinfo=UTC)  # Saturday
+    assert bot._in_premarket_window(saturday_730am_et) is False
+
+
+def test_auto_cycle_places_an_extended_hours_limit_order_premarket(tmp_path, monkeypatch):
+    """The core premarket path: market CLOSED (clock.is_open=False) but inside the
+    premarket window - a genuine gap-lane buy signal must submit an extended-hours
+    LIMIT order (with a buffer above proposed_entry), never a market order, since
+    Alpaca rejects market orders entirely outside 9:30-16:00."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _fund_bankroll(monkeypatch)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+
+    live_gapper = StockCandidate(
+        symbol="RCON", price=6.0, percent_change=90.0, relative_volume=30.0,
+        total_volume=0, float_shares=700_000, is_leading_gainer=True,
+    )
+    monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [live_gapper])
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.5))
+
+    fake_order = MagicMock()
+    fake_order.id = "premarket-order-1"
+    fake_order.symbol = "RCON"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)  # market closed
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+        MockBroker.return_value.submit_market_order.assert_not_called()
+        args, _ = MockBroker.return_value.submit_extended_hours_limit_order.call_args
+        symbol, qty, side, limit_price = args
+        assert symbol == "RCON"
+        assert side == "buy"
+        expected_limit = round(5.0 * (1 + PREMARKET_LIMIT_BUFFER_PCT / 100), 2)  # _setup's proposed_entry is 5.0
+        assert limit_price == expected_limit
+
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "premarket-order-1")
+    assert buy["stop_loss_price"] == 4.9  # _setup's proposed_stop - recorded for OUR OWN R tracking
+
+
+def test_auto_cycle_stays_idle_premarket_when_the_feature_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr("app.config.settings.premarket_trading_enabled", False)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+
+    assert "market is closed" in bot.status.last_message.lower()
+    MockBroker.return_value.submit_extended_hours_limit_order.assert_not_called()
+
+
+def test_manage_open_positions_runs_premarket_not_just_regular_hours(tmp_path, monkeypatch):
+    """RCON's real pattern: a premarket position can fully round-trip before 9:30.
+    Exit-indicator monitoring is its ONLY protection during that window - it must not
+    sit unwatched just because the market technically hasn't opened yet."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot(symbol="RCON")
+    bot = TradingBot()
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))  # triggers exit_indicators
+
+    fake_order = MagicMock()
+    fake_order.id = "premarket-exit-1"
+    fake_order.symbol = "RCON"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)  # premarket
+        MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "RCON", "qty": 40, "current_price": 9.0}]
+        MockBroker.return_value.open_orders.return_value = []
+        MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        status = bot.manage_open_positions()
+
+    assert "RCON" in status.last_message
+    MockBroker.return_value.submit_market_order.assert_not_called()
+    args, _ = MockBroker.return_value.submit_extended_hours_limit_order.call_args
+    _, _, side, limit_price = args
+    assert side == "sell"
+    assert limit_price == round(9.0 * (1 - PREMARKET_LIMIT_BUFFER_PCT / 100), 2)  # below current price - urgency, not best price
+
+
+def test_manage_open_positions_ignores_premarket_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    monkeypatch.setattr("app.config.settings.premarket_trading_enabled", False)
+    bot = TradingBot()
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        status = bot.manage_open_positions()
+
+    MockBroker.return_value.positions_as_dicts.assert_not_called()
+
+
+def test_regular_hours_open_arms_a_stop_for_a_premarket_filled_position(tmp_path, monkeypatch):
+    """The protection-gap closer: a premarket fill recorded a stop_loss_price but the
+    broker holds NOTHING (extended hours disallows stop orders entirely) - the first
+    regular-hours cycle must place the real resting stop."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot(symbol="RCON", entry=6.0, stop=5.7, qty=40)
+    bot = TradingBot()
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))  # no exit signal
+
+    stop_order = MagicMock()
+    stop_order.id = "arm-stop-1"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)  # regular hours now
+        MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "RCON", "qty": 40, "current_price": 6.2}]
+        MockBroker.return_value.open_orders.return_value = []  # nothing resting - premarket fill had no bracket
+        MockBroker.return_value.submit_stop_order.return_value = stop_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.manage_open_positions()
+
+    MockBroker.return_value.submit_stop_order.assert_called_once_with("RCON", 40, 5.7)
+    buy = next(t for t in trade_log.list_trades() if t["order_id"] == "RCON-buy")
+    assert buy["exit_order_id"] == "arm-stop-1"
+    assert buy["exit_reason"] == "stop"
+
+
+def test_regular_hours_open_does_not_rearm_a_stop_that_already_exists(tmp_path, monkeypatch):
+    """A regular-hours bracket entry already has its stop resting - the arming check
+    must not fire a second, duplicate stop order on top of it."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+    _open_lot(symbol="ACHR", entry=6.0, stop=5.7, qty=40)
+    bot = TradingBot()
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    existing_stop = MagicMock()
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 40, "current_price": 6.2}]
+        MockBroker.return_value.open_orders.return_value = [existing_stop]  # bracket stop already resting
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.manage_open_positions()
+
+    MockBroker.return_value.submit_stop_order.assert_not_called()

@@ -6,6 +6,7 @@ from alpaca.trading.requests import (
     GetAssetsRequest,
     GetOrdersRequest,
     GetPortfolioHistoryRequest,
+    LimitOrderRequest,
     MarketOrderRequest,
     StopLossRequest,
     StopOrderRequest,
@@ -183,6 +184,21 @@ class AlpacaBroker:
 
     def get_order(self, order_id: str):
         return self.client.get_order_by_id(order_id)
+
+    def submit_extended_hours_limit_order(self, symbol: str, qty: float, side: str, limit_price: float):
+        """Premarket/after-hours entries and exits MUST be limit orders - Alpaca rejects
+        both market orders and bracket (stop/target) legs outside 9:30-16:00 ET
+        entirely. No stop-loss can rest at the broker for an extended-hours fill until
+        regular hours actually opens (see TradingBot._arm_missing_stop)."""
+        order = LimitOrderRequest(
+            symbol=symbol.upper(),
+            qty=qty,
+            side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=round(limit_price, 2),
+            extended_hours=True,
+        )
+        return self.client.submit_order(order_data=order)
 
     def submit_stop_order(self, symbol: str, qty: float, stop_price: float):
         """A standalone resting stop-sell - used to move a winning position's protection

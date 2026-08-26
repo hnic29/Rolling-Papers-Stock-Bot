@@ -170,8 +170,11 @@ def test_scan_universe_merges_sweep_gainers_and_the_static_list(monkeypatch):
     assert response.swept_count == 8_253
 
 
-def _sweep_bar(close, volume):
-    return SimpleNamespace(close=close, volume=volume)
+def _sweep_bar(close, volume, timestamp=None):
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+
+    return SimpleNamespace(close=close, volume=volume, timestamp=timestamp or _dt.now(_ZI("America/New_York")))
 
 
 def test_full_market_sweep_finds_a_qualifying_mover_across_the_whole_market(monkeypatch):
