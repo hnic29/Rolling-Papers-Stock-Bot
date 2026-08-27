@@ -23,9 +23,12 @@ from app.models import (
     BootstrapRequest,
     BotStatus,
     ChangePasswordRequest,
+    CreateUserRequest,
     LoginRequest,
+    ResetPasswordRequest,
     ScannerRequest,
     TradeRequest,
+    UserListItem,
     UserPublic,
 )
 from app.paths import resource_path
@@ -277,6 +280,50 @@ def change_my_password(request: Request, body: ChangePasswordRequest):
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
     users.set_password(request.state.user_id, body.new_password)
     return {"message": "Password updated."}
+
+
+def _require_admin(request: Request) -> None:
+    if not request.state.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def _user_list_item(user: dict) -> UserListItem:
+    return UserListItem(id=user["id"], username=user["username"], is_admin=bool(user["is_admin"]), created_at=user["created_at"])
+
+
+@app.get("/api/users", response_model=list[UserListItem])
+def list_users_route(request: Request):
+    _require_admin(request)
+    return [_user_list_item(user) for user in users.list_users()]
+
+
+@app.post("/api/users", response_model=UserListItem)
+def create_user_route(body: CreateUserRequest, request: Request):
+    """Admin-provisioned account creation - each person gets their own login and,
+    once they save it on their own Settings page, their own Alpaca account. There's
+    no public registration route; only an existing admin can add someone."""
+    _require_admin(request)
+    username = body.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username can't be empty.")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    try:
+        user = users.create_user(username, body.password, is_admin=body.is_admin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _user_list_item(user)
+
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, body: ResetPasswordRequest, request: Request):
+    _require_admin(request)
+    if users.get_user_by_id(user_id) is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    users.set_password(user_id, body.new_password)
+    return {"message": "Password reset."}
 
 
 def _bankroll_status(user_id: int) -> BankrollStatus:

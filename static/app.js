@@ -46,6 +46,10 @@ async function initAuthGate() {
     document.querySelector("#session-username").textContent = me.username;
     document.querySelector("#logout").hidden = false;
     document.querySelector("#settings-username").textContent = me.username;
+    if (me.is_admin) {
+      document.querySelector("#users-panel").hidden = false;
+      loadUsers();
+    }
   } catch (error) {
     loginForm.hidden = false;
   }
@@ -1572,6 +1576,76 @@ document.querySelector("#change-password-form").addEventListener("submit", async
     document.querySelector("#message").textContent = "Password updated.";
   } catch (error) {
     document.querySelector("#message").textContent = `Could not update password: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+function renderUserRow(user) {
+  return `
+    <li class="user-row" data-user-id="${user.id}">
+      <span>${escapeHtml(user.username)}${user.is_admin ? " <em>(admin)</em>" : ""}</span>
+      <form class="reset-password-form">
+        <input type="password" name="new_password" placeholder="New password" minlength="8" autocomplete="new-password" required />
+        <button type="submit">Reset Password</button>
+      </form>
+    </li>
+  `;
+}
+
+async function loadUsers() {
+  const list = document.querySelector("#users-list");
+  try {
+    const userList = await api("/api/users");
+    list.innerHTML = userList.map(renderUserRow).join("");
+  } catch (error) {
+    list.innerHTML = `<li>Could not load users: ${escapeHtml(error.message)}</li>`;
+  }
+}
+
+document.querySelector("#add-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify({
+        username: form.username.value,
+        password: form.password.value,
+        is_admin: form.is_admin.checked,
+      }),
+    });
+    form.reset();
+    document.querySelector("#message").textContent = "User added.";
+    await loadUsers();
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not add user: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+document.querySelector("#users-list").addEventListener("submit", async (event) => {
+  if (!event.target.matches(".reset-password-form")) return;
+  event.preventDefault();
+  const form = event.target;
+  const row = form.closest(".user-row");
+  const userId = row.dataset.userId;
+  const submitButton = form.querySelector('button[type="submit"]');
+
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await api(`/api/users/${userId}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ new_password: form.new_password.value }),
+    });
+    form.reset();
+    document.querySelector("#message").textContent = "Password reset.";
+  } catch (error) {
+    document.querySelector("#message").textContent = `Could not reset password: ${error.message}`;
   } finally {
     if (submitButton) submitButton.disabled = false;
   }

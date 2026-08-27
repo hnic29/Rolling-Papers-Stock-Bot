@@ -759,6 +759,32 @@ form {
   padding: 0;
 }
 
+.user-row {
+  align-items: center;
+  background: rgba(4, 11, 19, 0.46);
+  border: 1px solid rgba(190, 213, 230, 0.12);
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+
+.user-row em {
+  color: #7cf0b3;
+  font-style: normal;
+  font-size: 12px;
+}
+
+.user-row .reset-password-form {
+  gap: 8px;
+}
+
+.user-row .reset-password-form input {
+  min-width: 160px;
+}
+
 .settings-form {
   align-items: end;
   display: grid;

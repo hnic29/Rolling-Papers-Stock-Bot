@@ -689,6 +689,21 @@
             <button type="submit">Update Password</button>
           </form>
         </article>
+
+        <article class="panel settings-panel" id="users-panel" hidden>
+          <h2>Users</h2>
+          <p class="chart-hint">
+            Add an account for someone you want trading on this bot — they get their own login, their own Alpaca
+            account (added on their own Settings page), and a fully separate bankroll from yours.
+          </p>
+          <form id="add-user-form" class="settings-form">
+            <label>Username <input name="username" autocomplete="off" required /></label>
+            <label>Temporary password <input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <label class="check-row"><input name="is_admin" type="checkbox" /> Also make this person an admin</label>
+            <button type="submit">Add User</button>
+          </form>
+          <ul id="users-list" class="connection-test-results"></ul>
+        </article>
       </section>
     </main>
 

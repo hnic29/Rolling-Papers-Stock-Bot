@@ -182,6 +182,26 @@ class UserPublic(BaseModel):
     is_admin: bool
 
 
+class UserListItem(BaseModel):
+    id: int
+    username: str
+    is_admin: bool
+    created_at: str
+
+
+class CreateUserRequest(BaseModel):
+    """Admin-provisioned account creation - see main.create_user_route. Not a public
+    sign-up endpoint; only an existing admin can call it."""
+
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
+
 class BankrollTransaction(BaseModel):
     id: int
     created_at: str
