@@ -57,6 +57,11 @@ class TradingBot:
         self.strategy = SmallAccountPullbackStrategy()
         self.risk = RiskManager()
         self.scanner = MarketScanner()
+        # MarketScanner builds its own strategy instance too - shared here so
+        # set_market_regime()'s float-ceiling adjustment (the only mutable state this
+        # strategy carries) actually reaches the whole-market sweep, not just the gap
+        # lane and entry evaluation, which both already go through self.strategy.
+        self.scanner.strategy = self.strategy
         self._trading_day = current_trading_day()
         self._auto_trading_started_at: datetime | None = None
         # In-memory position-management state; lost on restart, which is safe - peaks
@@ -567,6 +572,10 @@ class TradingBot:
         gap_symbols = {c.symbol for c in gap_lane}
         qualifying = [c for c in scan_results if c.score >= 4 and c.symbol not in held_symbols and c.symbol not in gap_symbols]
 
+        # Sets the float ceiling for the NEXT cycle's scoring, using THIS cycle's real
+        # qualifying count - see SmallAccountPullbackStrategy.set_market_regime.
+        self.strategy.set_market_regime(len(gap_lane) + len(qualifying))
+
         # (symbol, injected live candidate or None) - gap lane evaluated first.
         entry_queue = [(c.symbol, c) for c in gap_lane] + [(c.symbol, None) for c in qualifying]
 
@@ -581,6 +590,20 @@ class TradingBot:
             except Exception:
                 continue
             if decision.signal != Signal.buy:
+                continue
+
+            # Warrior Trading's own trading-plan template lists "positive catalyst" as
+            # an explicit premarket-only requirement, on top of the same 5-pillar
+            # score every candidate needs anyway. It makes sense specifically here: no
+            # broker-side stop can rest premarket at all (see _arm_missing_stop), so a
+            # genuine story behind the move is the difference between a real breakout
+            # and an unexplained illiquid print with nothing to catch it. Regular-hours
+            # entries aren't held to this - they already have a resting stop.
+            if premarket and not setup.candidate.has_news:
+                skipped.append(f"{symbol} (premarket requires a real news catalyst, none found)")
+                continue
+            if premarket and setup.candidate.news_sentiment == SENTIMENT_NEGATIVE:
+                skipped.append(f"{symbol} (premarket + dilution-risk catalyst - skipped outright, not just sized down)")
                 continue
 
             # Premarket: extended_hours=True routes this through a LIMIT order (Alpaca

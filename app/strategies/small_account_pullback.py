@@ -4,6 +4,7 @@ from app.services.catalyst import SENTIMENT_NEGATIVE, describe_catalyst
 
 
 HOT_SECTORS = {"ai", "biotech", "china", "chinese tech", "tech"}
+HOT_MARKET_MAX_FLOAT = 20_000_000
 
 
 class SmallAccountPullbackStrategy:
@@ -13,7 +14,15 @@ class SmallAccountPullbackStrategy:
     preferred_relative_volume = 20.0
     min_percent_change = 10.0
     min_total_volume = 1_000_000
-    max_float = 20_000_000
+    max_float = HOT_MARKET_MAX_FLOAT  # the default baseline everything else assumes
+    # Warrior Trading's own trading-plan template ties float tolerance to market
+    # regime: "under 20mil in hot market, under 10mil in cold market." Genuine setups
+    # are scarcer on a cold day, so the float bar tightens rather than staying fixed.
+    max_float_cold_market = 10_000_000
+    # Fewer than this many candidates clearing 4-of-5 market-wide in a cycle counts as
+    # "cold." Deliberately reuses data the sweep/gap lane already compute every cycle -
+    # no extra API calls, no separate volatility/breadth indicator to get wrong.
+    cold_market_qualifier_threshold = 2
     preferred_min_price = 2.0
     preferred_max_price = 20.0
     max_pullback_retrace = 0.5
@@ -23,6 +32,20 @@ class SmallAccountPullbackStrategy:
     # identical seed average and MACD reads exactly 0, which would reject every early-
     # session trade. Skip the filter rather than treat an undefined reading as "negative."
     macd_min_candles = 26
+    # From Warrior Trading's own trading-plan template: "MACD crosses signal line,
+    # decreasing volume" listed alongside a sharp reversal candle as trade-invalidation
+    # triggers. The candle-pattern side was already covered (topping tail, red close);
+    # these two were genuinely missing.
+    volume_decay_lookback = 5
+    volume_decay_ratio = 0.5
+
+    def set_market_regime(self, qualifying_candidate_count: int) -> None:
+        """Tightens the float ceiling on a cold day, relaxes it back on a hot one.
+        Meant to be called once per automation cycle with THIS cycle's qualifying
+        count (score>=4 candidates found market-wide) - takes effect starting the
+        following cycle, a one-cycle (~60s) lag that's immaterial for a signal that
+        shouldn't swing minute to minute anyway."""
+        self.max_float = self.max_float_cold_market if qualifying_candidate_count < self.cold_market_qualifier_threshold else HOT_MARKET_MAX_FLOAT
 
     def score_candidate(self, candidate: StockCandidate) -> tuple[int, list[str]]:
         score = 0
@@ -152,7 +175,27 @@ class SmallAccountPullbackStrategy:
             reasons.append("exit: topping-tail candle formed")
         if last and last.close < last.open:
             reasons.append("exit: red candle formed")
+        # Same warm-up guard evaluate() uses on entry - too early in the session, MACD
+        # and its signal line are both still noisy off the same seed average, so a
+        # "cross" here isn't a real signal yet.
+        if len(setup.candles) >= self.macd_min_candles and setup.macd < setup.macd_signal:
+            reasons.append("exit: MACD crossed below its signal line")
+        if self._volume_is_decreasing(setup.candles):
+            reasons.append("exit: buying volume is drying up")
         return reasons
+
+    def _volume_is_decreasing(self, candles: list[Candle]) -> bool:
+        """The latest candle's volume has fallen well below the recent pace - the
+        interest that drove the move is drying up. Needs a few candles of "recent
+        pace" to compare against; too little history and this simply doesn't fire
+        rather than guessing."""
+        if len(candles) < self.volume_decay_lookback + 1:
+            return False
+        recent = candles[-(self.volume_decay_lookback + 1) : -1]
+        avg_recent_volume = sum(c.volume for c in recent) / len(recent)
+        if avg_recent_volume <= 0:
+            return False
+        return candles[-1].volume < avg_recent_volume * self.volume_decay_ratio
 
     def _has_topping_tail(self, candle: Candle) -> bool:
         body_top = max(candle.open, candle.close)

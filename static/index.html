@@ -423,7 +423,7 @@
             <li><strong>Total volume &ge; 1,000,000 shares</strong> — enough real activity to actually get filled.</li>
             <li><strong>Up at least 10% on the day</strong> — a real move, not noise.</li>
             <li><strong>Price between $2 and $20</strong> — the "small account" sweet spot; cheap enough to size meaningfully, not so cheap it's a penny-stock trap.</li>
-            <li><strong>Float at or below 20,000,000 shares</strong> — genuinely small-float, the structural reason it can move fast.</li>
+            <li><strong>Float at or below 20,000,000 shares</strong> — genuinely small-float, the structural reason it can move fast. Tightens to 10,000,000 automatically on a "cold" cycle (fewer than 2 candidates clearing 4-of-5 market-wide) and relaxes back once genuine setups reappear — Warrior Trading's own trading-plan template ties float tolerance to market regime the same way.</li>
           </ol>
           <p class="chart-hint">
             News catalyst and "hot sector" (AI, biotech, China/Chinese tech, tech) are also surfaced as reasons in the scanner, but they're informational only — they never add to the score.
@@ -491,7 +491,7 @@
           </p>
           <p>Instead, every open position gets <strong>three layers of management</strong>, every cycle:</p>
           <ul class="strategy-check-list">
-            <li><strong>Exit indicators</strong> — a topping-tail candle (long upper wick: buyers pushed, sellers rejected hard) or a red close fires an immediate market exit. (Level-two signals — large/hidden sellers, red-tape bursts — are supported in the code but not live-wired; see <a href="#strategy-honesty">Limitations</a>.)</li>
+            <li><strong>Exit indicators</strong> — a topping-tail candle (long upper wick: buyers pushed, sellers rejected hard), a red close, MACD crossing below its own signal line, or the latest candle's volume dropping well under the recent pace all fire an immediate market exit. (Level-two signals — large/hidden sellers, red-tape bursts — are supported in the code but not live-wired; see <a href="#strategy-honesty">Limitations</a>.)</li>
             <li><strong>Breakeven protection at 2R</strong> — the first time a position is up twice its risk (Ross's minimum-target multiple), the entry stop is replaced with a stop at the entry price: "move the stop up toward break-even." A proven winner can no longer become a loss.</li>
             <li><strong>Giveback exit</strong> — once 2R has printed, falling back below +1R closes the position and banks what's left, instead of riding the whole gain back down waiting for a reversal candle.</li>
           </ul>
@@ -532,12 +532,15 @@
             <li>Check the trading window (9:30 AM – 4:00 PM ET, skipped during premarket)</li>
             <li>Check the bankroll has anything available to trade</li>
             <li><strong>Scan</strong> the universe, score every symbol, rank by score</li>
-            <li>For each qualifying candidate not already held, run the full entry pattern check and submit a sized buy if it triggers — a <strong>market</strong> order with a bracket stop during regular hours, or a <strong>limit</strong> order with no bracket during premarket (Alpaca disallows both outside 9:30–16:00)</li>
+            <li>For each qualifying candidate not already held, run the full entry pattern check and submit a sized buy if it triggers — a <strong>market</strong> order with a bracket stop during regular hours, or a <strong>limit</strong> order with no bracket during premarket (Alpaca disallows both outside 9:30–16:00). Premarket additionally requires a real, non-dilution-risk news catalyst — no exceptions on "leading gainer" or "hot sector" the way regular hours allows.</li>
           </ol>
           <p class="chart-hint">
             A premarket fill holds <strong>no broker-side stop</strong> until regular hours opens and one gets armed automatically —
             exit-indicator monitoring (step 2) is its only protection until then. This exists because Ross Cameron's entire
             2026-08-25 P&amp;L happened 7:00–9:30 AM, fully resolved before a regular-hours-only bot would ever look.
+            Requiring a genuine catalyst specifically here comes straight from Warrior Trading's own trading-plan template,
+            which lists it as a premarket-only requirement — with no resting stop possible, a real story behind the move
+            matters more here than anywhere else in the system.
           </p>
         </article>
 

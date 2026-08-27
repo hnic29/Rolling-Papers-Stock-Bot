@@ -434,6 +434,130 @@ def test_a_dilution_risk_catalyst_halves_position_size(tmp_path, monkeypatch):
     assert any("dilution-risk" in title.lower() for title in sent)
 
 
+def _premarket_bot(monkeypatch, tmp_path, candidate, db_name="premarket_catalyst.db"):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / db_name)
+    _fund_bankroll(monkeypatch, amount=100_000.0)
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[]))
+    monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [candidate])
+    setup = PullbackSetup(
+        candidate=candidate, candles=[], ema9=4.9, macd=0.01, vwap=4.9,
+        high_of_day=5.05, pullback_low=4.9, proposed_entry=5.0, proposed_stop=4.9,
+    )
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: setup)
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda s: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
+    return bot
+
+
+def test_premarket_entry_without_a_catalyst_is_skipped(tmp_path, monkeypatch):
+    """Warrior Trading's own trading-plan template lists a premarket-only
+    requirement: "Top 5 on Gap scanner, positive catalyst." No broker-side stop can
+    rest premarket at all, so a genuine story behind the move matters more here than
+    anywhere else in the system."""
+    candidate = StockCandidate(symbol="NOCAT", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000)  # has_news defaults False
+    bot = _premarket_bot(monkeypatch, tmp_path, candidate)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        status = bot.auto_cycle()
+        MockBroker.return_value.submit_extended_hours_limit_order.assert_not_called()
+
+    assert "requires a real news catalyst" in status.last_message
+
+
+def test_premarket_entry_with_a_dilution_risk_catalyst_is_skipped_outright(tmp_path, monkeypatch):
+    """Premarket + a dilution-risk catalyst is worse than either alone - blocked
+    entirely here, not just sized down the way regular hours handles it."""
+    candidate = StockCandidate(
+        symbol="RISKY", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000,
+        has_news=True, news_sentiment="negative", news_category="offering_dilution",
+    )
+    bot = _premarket_bot(monkeypatch, tmp_path, candidate)
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        status = bot.auto_cycle()
+        MockBroker.return_value.submit_extended_hours_limit_order.assert_not_called()
+
+    assert "dilution-risk catalyst" in status.last_message
+
+
+def test_premarket_entry_with_a_positive_catalyst_proceeds(tmp_path, monkeypatch):
+    candidate = StockCandidate(
+        symbol="GOODCAT", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000,
+        has_news=True, news_sentiment="positive", news_category="contract",
+    )
+    bot = _premarket_bot(monkeypatch, tmp_path, candidate)
+
+    fake_order = MagicMock()
+    fake_order.id = "goodcat-order-1"
+    fake_order.symbol = "GOODCAT"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+        args, _ = MockBroker.return_value.submit_extended_hours_limit_order.call_args
+
+    assert args[0] == "GOODCAT"
+
+
+def test_regular_hours_entry_without_news_is_not_blocked(tmp_path, monkeypatch):
+    """The catalyst requirement is premarket-only - a regular-hours entry already has
+    a real broker-side stop resting, so it isn't held to the same bar."""
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "regular_hours_no_news.db")
+    _fund_bankroll(monkeypatch, amount=100_000.0)
+
+    bot = TradingBot()
+    bot.status.auto_trading_enabled = True
+    bot.status.daily_pnl = 0.0
+    monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
+    monkeypatch.setattr(bot.scanner, "scan_universe", lambda **kw: ScannerResponse(results=[_candidate("NONEWS")]))
+    setup = PullbackSetup(
+        candidate=StockCandidate(symbol="NONEWS", price=5.0, percent_change=15.0, relative_volume=6.0, total_volume=2_000_000),
+        candles=[], ema9=4.9, macd=0.01, vwap=4.9, high_of_day=5.05, pullback_low=4.9, proposed_entry=5.0, proposed_stop=4.9,
+    )
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: setup)
+    monkeypatch.setattr(bot.strategy, "evaluate", lambda s: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
+
+    fake_order = MagicMock()
+    fake_order.id = "no-news-order-1"
+    fake_order.symbol = "NONEWS"
+    fake_order.status = "accepted"
+
+    with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
+        MockBroker.return_value.positions_as_dicts.return_value = []
+        MockBroker.return_value.submit_market_order.return_value = fake_order
+        MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
+
+        bot.auto_cycle()
+        args, _ = MockBroker.return_value.submit_market_order.call_args
+
+    assert args[0] == "NONEWS"
+
+
+def test_scanner_shares_the_bots_strategy_instance():
+    """set_market_regime's float-ceiling adjustment is the strategy's only mutable
+    state - if the scanner built its own separate SmallAccountPullbackStrategy(), the
+    whole-market sweep would never see a regime change the bot itself set."""
+    bot = TradingBot()
+    assert bot.scanner.strategy is bot.strategy
+
+
 def test_idle_walk_away_clock_starts_at_the_open_not_before(monkeypatch, tmp_path):
     """The bug that silenced the bot at the bell on 2026-08-25: the idle baseline was
     the midnight state-rollover timestamp, so the FIRST 9:30 cycle read 425+ idle
@@ -627,7 +751,14 @@ def test_premarket_sizing_respects_the_position_cap_against_the_buffered_limit_p
     monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [
         StockCandidate(symbol="RCON", price=5.0, percent_change=90.0, relative_volume=30.0, total_volume=0, float_shares=700_000, is_leading_gainer=True)
     ])
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))  # proposed_entry 5.0
+
+    def _premarket_setup_with_catalyst(symbol, scanner, candidate=None):
+        setup = _setup(symbol)  # proposed_entry 5.0
+        setup.candidate.has_news = True
+        setup.candidate.news_sentiment = "positive"  # premarket entries require a real catalyst - see auto_cycle
+        return setup
+
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", _premarket_setup_with_catalyst)
     monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.5))
 
     fake_order = MagicMock()
@@ -1333,7 +1464,14 @@ def test_auto_cycle_places_an_extended_hours_limit_order_premarket(tmp_path, mon
         total_volume=0, float_shares=700_000, is_leading_gainer=True,
     )
     monkeypatch.setattr(bot.scanner, "realtime_gap_candidates", lambda: [live_gapper])
-    monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
+
+    def _premarket_setup_with_catalyst(symbol, scanner, candidate=None):
+        setup = _setup(symbol)
+        setup.candidate.has_news = True
+        setup.candidate.news_sentiment = "positive"  # premarket entries require a real catalyst - see auto_cycle
+        return setup
+
+    monkeypatch.setattr("app.services.bot.build_pullback_setup", _premarket_setup_with_catalyst)
     monkeypatch.setattr(bot.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.5))
 
     fake_order = MagicMock()

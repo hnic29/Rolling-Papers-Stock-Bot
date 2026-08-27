@@ -11,6 +11,41 @@ MARKET_TZ = ZoneInfo("America/New_York")
 EMA_PERIOD = 9
 MACD_FAST_PERIOD = 12
 MACD_SLOW_PERIOD = 26
+MACD_SIGNAL_PERIOD = 9  # the classic 12/26/9 MACD convention
+
+
+def _ema_series(values: list[float], period: int) -> list[float]:
+    """Same seeding/smoothing as compute_ema, but returns every intermediate value,
+    not just the last - needed to build the MACD line's own signal line (an EMA of
+    the MACD line itself), which compute_macd's single final value can't provide."""
+    if not values:
+        return []
+    seed_len = min(period, len(values))
+    seed = sum(values[:seed_len]) / seed_len
+    series = [seed] * seed_len  # backfill so the series aligns 1:1 with `values`
+    multiplier = 2 / (period + 1)
+    ema = seed
+    for value in values[seed_len:]:
+        ema = (value - ema) * multiplier + ema
+        series.append(ema)
+    return series
+
+
+def compute_macd_signal(
+    values: list[float], fast: int = MACD_FAST_PERIOD, slow: int = MACD_SLOW_PERIOD, signal_period: int = MACD_SIGNAL_PERIOD
+) -> float:
+    """The MACD line's own signal line - MACD crossing below this is the classic
+    momentum-decay exit signal (Warrior Trading's own trading-plan template lists
+    "MACD crosses signal line" as an explicit trade-invalidation trigger, alongside
+    decreasing volume and a sharp reversal candle - the other two were already
+    covered by exit_indicators()'s red-candle and topping-tail checks; this was the
+    one genuinely missing)."""
+    if not values:
+        return 0.0
+    fast_series = _ema_series(values, fast)
+    slow_series = _ema_series(values, slow)
+    macd_series = [f - s for f, s in zip(fast_series, slow_series)]
+    return _ema_series(macd_series, signal_period)[-1] if macd_series else 0.0
 
 
 def compute_ema(values: list[float], period: int = EMA_PERIOD) -> float:
@@ -94,6 +129,7 @@ def build_pullback_setup(symbol: str, scanner: MarketScanner, candidate: StockCa
     closes = [candle.close for candle in candles]
     ema9 = compute_ema(closes)
     macd = compute_macd(closes)
+    macd_signal = compute_macd_signal(closes)
     vwap = compute_vwap(candles)
     high_of_day = max(candle.high for candle in candles)
     # The strategy treats candles[:-2] as the prior impulse and candles[-2] as the
@@ -108,6 +144,7 @@ def build_pullback_setup(symbol: str, scanner: MarketScanner, candidate: StockCa
         candles=candles,
         ema9=round(ema9, 4),
         macd=round(macd, 4),
+        macd_signal=round(macd_signal, 4),
         vwap=round(vwap, 4),
         high_of_day=high_of_day,
         pullback_low=pullback_low,

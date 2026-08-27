@@ -7,7 +7,7 @@ from app.brokers.alpaca_broker import AlpacaBroker
 from app.config import settings
 from app.models import Candle, PullbackSetup, Signal, StockCandidate
 from app.services import float_lookup
-from app.services.live_setup import compute_ema, compute_macd, compute_vwap
+from app.services.live_setup import compute_ema, compute_macd, compute_macd_signal, compute_vwap
 from app.services.scanner import AVG_VOLUME_WINDOW, MarketScanner
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
@@ -95,6 +95,7 @@ def _build_setup(candidate: StockCandidate, bars_so_far: list[dict]) -> Pullback
     closes = [candle.close for candle in candles]
     ema9 = compute_ema(closes)
     macd = compute_macd(closes)
+    macd_signal = compute_macd_signal(closes)
     vwap = compute_vwap(candles)
     high_of_day = max(candle.high for candle in candles)
     pullback_low = candles[-2].low
@@ -106,6 +107,7 @@ def _build_setup(candidate: StockCandidate, bars_so_far: list[dict]) -> Pullback
         candles=candles,
         ema9=round(ema9, 4),
         macd=round(macd, 4),
+        macd_signal=round(macd_signal, 4),
         vwap=round(vwap, 4),
         high_of_day=high_of_day,
         pullback_low=pullback_low,

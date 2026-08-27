@@ -79,6 +79,7 @@ class PullbackSetup(BaseModel):
     candles: list[Candle]
     ema9: float
     macd: float
+    macd_signal: float = 0.0
     vwap: float
     high_of_day: float
     pullback_low: float
