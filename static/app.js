@@ -719,12 +719,27 @@ let activeDrawTool = "cursor";
 let pendingDrawing = null;
 let previewPoint = null;
 const drawingsBySymbol = {};
+let activeDrawColor = "#8ab4f8";
 
 const DRAWING_POINTS_REQUIRED = {
   trendline: 2,
+  ray: 2,
+  info_line: 2,
+  extended_line: 2,
+  trend_angle: 2,
   horizontal: 1,
+  horizontal_ray: 1,
+  vertical: 1,
+  crossline: 1,
+  parallel_channel: 3,
+  regression: 2,
+  flat_channel: 3,
+  disjoint_channel: 4,
+  pitchfork: 3,
+  schiff_pitchfork: 3,
+  modified_schiff_pitchfork: 3,
+  inside_pitchfork: 3,
   fib: 2,
-  channel: 3,
   rectangle: 2,
   text: 1,
 };
@@ -732,9 +747,23 @@ const DRAWING_POINTS_REQUIRED = {
 const DRAW_HINTS = {
   cursor: "Scroll to zoom, drag to pan, double-click to reset zoom.",
   trendline: "Click a start point, then an end point to draw a trend line.",
+  ray: "Click a start point, then a second point - the line continues past it.",
+  info_line: "Click a start point, then an end point to see the price/time change between them.",
+  extended_line: "Click two points - the line extends across the whole chart both ways.",
+  trend_angle: "Click a start point, then an end point to measure the angle.",
   horizontal: "Click a price level to draw a horizontal line.",
+  horizontal_ray: "Click a point - the line extends right from there.",
+  vertical: "Click a point in time to mark it with a vertical line.",
+  crossline: "Click a point to mark it with crossed horizontal and vertical lines.",
+  parallel_channel: "Click two points for the base line, then a third point to set channel width.",
+  regression: "Click a start point and an end point - draws the best-fit trend line (and its bands) between them.",
+  flat_channel: "Click two points for the sloped side, then a third point for the flat side.",
+  disjoint_channel: "Click two points for one line, then two more for the other - they don't need to be parallel.",
+  pitchfork: "Click three points: the handle, then the two prongs.",
+  schiff_pitchfork: "Click three points - same as Pitchfork, with an adjusted starting point.",
+  modified_schiff_pitchfork: "Click three points - same as Pitchfork, with a further-adjusted starting point.",
+  inside_pitchfork: "Click three points - a Pitchfork drawn from the opposite end.",
   fib: "Click the start extreme, then the end extreme for a Fibonacci retracement.",
-  channel: "Click two points for the base line, then a third point to set channel width.",
   rectangle: "Click one corner, then the opposite corner.",
   text: "Click a point on the chart to place a text note.",
   erase: "Click a drawing to remove it.",
@@ -808,11 +837,98 @@ function channelOffset(p1, p2, p3) {
   return p3.price - priceOnBase;
 }
 
+// Extends the line through pixel points (x1,y1)-(x2,y2) to the given target x,
+// returning the y it would cross there. Used to draw rays/extended lines/channel
+// edges/pitchfork teeth all the way to the chart's edge in screen space, which is
+// simpler and visually correct regardless of how the underlying time axis maps to
+// pixels (it isn't linear in wall-clock time - x is linear in bar index).
+function extendLineToX(x1, y1, x2, y2, targetX) {
+  if (x2 === x1) return y1;
+  const slope = (y2 - y1) / (x2 - x1);
+  return y1 + slope * (targetX - x1);
+}
+
+function hexToRgbComponents(hex) {
+  const clean = (hex || "#8ab4f8").replace("#", "");
+  const value = parseInt(clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean, 16);
+  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
+}
+
+function withAlpha(hex, alpha) {
+  const { r, g, b } = hexToRgbComponents(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function drawingColor(drawing) {
+  return drawing.color || "#8ab4f8";
+}
+
+// Least-squares fit of closing price against bar index over bars[startIdx..endIdx].
+function linearRegression(bars, startIdx, endIdx) {
+  const n = endIdx - startIdx + 1;
+  if (n < 2) return null;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+  for (let i = startIdx; i <= endIdx; i += 1) {
+    const x = i - startIdx;
+    const y = bars[i].close;
+    sumX += x;
+    sumY += y;
+    sumXY += x * y;
+    sumXX += x * x;
+  }
+  const denominator = n * sumXX - sumX * sumX;
+  const slope = denominator ? (n * sumXY - sumX * sumY) / denominator : 0;
+  const intercept = (sumY - slope * sumX) / n;
+  return { slope, intercept, n };
+}
+
+// Shared by every pitchfork variant: draws the median line from `handle` to the
+// midpoint of toothA/toothB, extended to the chart edge, plus two lines parallel to
+// it passing through toothA and toothB. The variants below only differ in which of
+// the three clicked points play the handle/tooth roles.
+function renderPitchforkLines(ctx, handle, toothA, toothB, color) {
+  const midAB = { time: (toothA.time + toothB.time) / 2, price: (toothA.price + toothB.price) / 2 };
+  const hx = xForPoint(handle);
+  const hy = yForPrice(handle.price);
+  const mx = xForPoint(midAB);
+  const my = yForPrice(midAB.price);
+  const { padding, chartWidth } = chartState;
+  const forwardX = mx >= hx ? padding.left + chartWidth : padding.left;
+  const medianEndY = extendLineToX(hx, hy, mx, my, forwardX);
+
+  ctx.strokeStyle = color;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(forwardX, medianEndY);
+  ctx.stroke();
+
+  const dx = mx - hx;
+  const dy = my - hy;
+  [toothA, toothB].forEach((p) => {
+    const px = xForPoint(p);
+    const py = yForPrice(p.price);
+    const farX = dx >= 0 ? padding.left + chartWidth : padding.left;
+    const t = dx !== 0 ? (farX - px) / dx : 0;
+    const farY = py + dy * t;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(farX, farY);
+    ctx.stroke();
+  });
+}
+
 function setDrawTool(tool) {
   activeDrawTool = tool;
   pendingDrawing = null;
   previewPoint = null;
-  document.querySelectorAll(".draw-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tool === tool));
+  document.querySelectorAll(".draw-tool-item").forEach((btn) => btn.classList.toggle("active", btn.dataset.tool === tool));
+  const active = document.querySelector(`.draw-tool-item[data-tool="${tool}"]`);
+  document.querySelector("#draw-tool-label").textContent = active ? active.textContent : "Cursor";
+  document.querySelector("#erase-tool").classList.toggle("active", tool === "erase");
   const canvas = document.querySelector("#candlestick-chart");
   canvas.classList.toggle("drawing", tool !== "cursor" && tool !== "erase");
   canvas.classList.toggle("erasing", tool === "erase");
@@ -852,13 +968,13 @@ function handleChartClick(event) {
 
   if (activeDrawTool === "text") {
     const text = window.prompt("Annotation text:", "");
-    if (text) currentDrawings().push({ type: "text", points: [point], text });
+    if (text) currentDrawings().push({ type: "text", points: [point], text, color: activeDrawColor });
     renderChart();
     return;
   }
 
   if (!pendingDrawing || pendingDrawing.type !== activeDrawTool) {
-    pendingDrawing = { type: activeDrawTool, points: [] };
+    pendingDrawing = { type: activeDrawTool, points: [], color: activeDrawColor };
   }
   pendingDrawing.points.push(point);
 
@@ -879,16 +995,82 @@ function distanceToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+// Shared by every pitchfork variant's hit test, mirroring renderPitchforkLines'
+// geometry exactly so a click "on the line" always matches what's actually drawn.
+function pitchforkHitTest(handle, toothA, toothB, x, y, threshold) {
+  const midAB = { time: (toothA.time + toothB.time) / 2, price: (toothA.price + toothB.price) / 2 };
+  const hx = xForPoint(handle);
+  const hy = yForPrice(handle.price);
+  const mx = xForPoint(midAB);
+  const my = yForPrice(midAB.price);
+  const { padding, chartWidth } = chartState;
+  const forwardX = mx >= hx ? padding.left + chartWidth : padding.left;
+  const medianEndY = extendLineToX(hx, hy, mx, my, forwardX);
+  if (distanceToSegment(x, y, hx, hy, forwardX, medianEndY) <= threshold) return true;
+
+  const dx = mx - hx;
+  const dy = my - hy;
+  return [toothA, toothB].some((p) => {
+    const px = xForPoint(p);
+    const py = yForPrice(p.price);
+    const farX = dx >= 0 ? padding.left + chartWidth : padding.left;
+    const t = dx !== 0 ? (farX - px) / dx : 0;
+    const farY = py + dy * t;
+    return distanceToSegment(x, y, px, py, farX, farY) <= threshold;
+  });
+}
+
 function hitTestDrawing(drawing, x, y, threshold) {
+  const { padding, chartWidth } = chartState;
+  const leftX = padding.left;
+  const rightX = padding.left + chartWidth;
+  const pts = drawing.points;
+
   if (drawing.type === "horizontal") {
-    return Math.abs(y - yForPrice(drawing.points[0].price)) <= threshold;
+    return Math.abs(y - yForPrice(pts[0].price)) <= threshold;
   }
-  if (drawing.type === "trendline") {
-    const [p1, p2] = drawing.points;
+  if (drawing.type === "horizontal_ray") {
+    const y0 = yForPrice(pts[0].price);
+    return distanceToSegment(x, y, xForPoint(pts[0]), y0, rightX, y0) <= threshold;
+  }
+  if (drawing.type === "vertical") {
+    const x0 = xForPoint(pts[0]);
+    return Math.abs(x - x0) <= threshold;
+  }
+  if (drawing.type === "crossline") {
+    const x0 = xForPoint(pts[0]);
+    const y0 = yForPrice(pts[0].price);
+    return Math.abs(x - x0) <= threshold || Math.abs(y - y0) <= threshold;
+  }
+  if (drawing.type === "trendline" || drawing.type === "trend_angle" || drawing.type === "info_line") {
+    if (pts.length < 2) return false;
+    const [p1, p2] = pts;
     return distanceToSegment(x, y, xForPoint(p1), yForPrice(p1.price), xForPoint(p2), yForPrice(p2.price)) <= threshold;
   }
+  if (drawing.type === "ray") {
+    if (pts.length < 2) return false;
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    const targetX = x2 >= x1 ? rightX : leftX;
+    return distanceToSegment(x, y, x1, y1, targetX, extendLineToX(x1, y1, x2, y2, targetX)) <= threshold;
+  }
+  if (drawing.type === "extended_line") {
+    if (pts.length < 2) return false;
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    return (
+      distanceToSegment(x, y, leftX, extendLineToX(x1, y1, x2, y2, leftX), rightX, extendLineToX(x1, y1, x2, y2, rightX)) <=
+      threshold
+    );
+  }
   if (drawing.type === "rectangle") {
-    const [p1, p2] = drawing.points;
+    const [p1, p2] = pts;
     const x1 = xForPoint(p1);
     const x2 = xForPoint(p2);
     const y1 = yForPrice(p1.price);
@@ -896,11 +1078,11 @@ function hitTestDrawing(drawing, x, y, threshold) {
     return x >= Math.min(x1, x2) && x <= Math.max(x1, x2) && y >= Math.min(y1, y2) && y <= Math.max(y1, y2);
   }
   if (drawing.type === "text") {
-    const p = drawing.points[0];
+    const p = pts[0];
     return Math.abs(x - xForPoint(p)) <= 60 && Math.abs(y - yForPrice(p.price)) <= 14;
   }
   if (drawing.type === "fib") {
-    const [p1, p2] = drawing.points;
+    const [p1, p2] = pts;
     const x1 = xForPoint(p1);
     const x2 = xForPoint(p2);
     if (x < Math.min(x1, x2) || x > Math.max(x1, x2)) return false;
@@ -908,14 +1090,75 @@ function hitTestDrawing(drawing, x, y, threshold) {
       (level) => Math.abs(y - yForPrice(p1.price + (p2.price - p1.price) * level)) <= threshold
     );
   }
-  if (drawing.type === "channel") {
-    const [p1, p2, p3] = drawing.points;
+  if (drawing.type === "parallel_channel") {
+    const [p1, p2, p3] = pts;
     if (distanceToSegment(x, y, xForPoint(p1), yForPrice(p1.price), xForPoint(p2), yForPrice(p2.price)) <= threshold) return true;
     if (!p3) return false;
     const offset = channelOffset(p1, p2, p3);
     const o1 = { time: p1.time, price: p1.price + offset };
     const o2 = { time: p2.time, price: p2.price + offset };
     return distanceToSegment(x, y, xForPoint(o1), yForPrice(o1.price), xForPoint(o2), yForPrice(o2.price)) <= threshold;
+  }
+  if (drawing.type === "flat_channel") {
+    if (pts.length < 2) return false;
+    const [p1, p2, p3] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    if (
+      distanceToSegment(x, y, leftX, extendLineToX(x1, y1, x2, y2, leftX), rightX, extendLineToX(x1, y1, x2, y2, rightX)) <=
+      threshold
+    )
+      return true;
+    if (!p3) return false;
+    const flatY = yForPrice(p3.price);
+    return Math.abs(y - flatY) <= threshold;
+  }
+  if (drawing.type === "disjoint_channel") {
+    if (pts.length < 2) return false;
+    const [p1, p2] = pts;
+    if (distanceToSegment(x, y, xForPoint(p1), yForPrice(p1.price), xForPoint(p2), yForPrice(p2.price)) <= threshold) return true;
+    if (pts.length < 4) return false;
+    const [, , p3, p4] = pts;
+    return distanceToSegment(x, y, xForPoint(p3), yForPrice(p3.price), xForPoint(p4), yForPrice(p4.price)) <= threshold;
+  }
+  if (drawing.type === "regression") {
+    if (pts.length < 2) return false;
+    const [p1, p2] = pts;
+    const bars = chartState.bars;
+    let idx1 = Math.round(fractionalIndexForTime(bars, p1.time));
+    let idx2 = Math.round(fractionalIndexForTime(bars, p2.time));
+    if (idx1 > idx2) [idx1, idx2] = [idx2, idx1];
+    const reg = linearRegression(bars, idx1, idx2);
+    if (!reg) return false;
+    const start = { time: new Date(bars[idx1].timestamp).getTime(), price: reg.intercept };
+    const end = { time: new Date(bars[idx2].timestamp).getTime(), price: reg.intercept + reg.slope * (idx2 - idx1) };
+    return distanceToSegment(x, y, xForPoint(start), yForPrice(start.price), xForPoint(end), yForPrice(end.price)) <= threshold;
+  }
+  if (drawing.type === "pitchfork") {
+    if (pts.length < 2) return false;
+    const [p1, p2, p3] = pts;
+    return pitchforkHitTest(p1, p2, p3 || p2, x, y, threshold);
+  }
+  if (drawing.type === "schiff_pitchfork") {
+    if (pts.length < 2) return false;
+    const [p1, p2, p3] = pts;
+    const handle = { time: (p1.time + p2.time) / 2, price: (p1.price + p2.price) / 2 };
+    return pitchforkHitTest(handle, p2, p3 || p2, x, y, threshold);
+  }
+  if (drawing.type === "modified_schiff_pitchfork") {
+    if (pts.length < 2) return false;
+    const [p1, p2, p3] = pts;
+    const schiffHandle = { time: (p1.time + p2.time) / 2, price: (p1.price + p2.price) / 2 };
+    const handle = { time: (p1.time + schiffHandle.time) / 2, price: (p1.price + schiffHandle.price) / 2 };
+    return pitchforkHitTest(handle, p2, p3 || p2, x, y, threshold);
+  }
+  if (drawing.type === "inside_pitchfork") {
+    if (pts.length < 2) return false;
+    const [p1, p2, p3] = pts;
+    if (!p3) return pitchforkHitTest(p1, p2, p2, x, y, threshold);
+    return pitchforkHitTest(p3, p1, p2, x, y, threshold);
   }
   return false;
 }
@@ -946,22 +1189,68 @@ function drawPriceLabel(ctx, price, y, color) {
 
 function renderDrawing(ctx, drawing, isPreview = false) {
   ctx.lineWidth = 1.5;
+  const color = drawingColor(drawing);
+  const stroke = isPreview ? withAlpha(color, 0.6) : color;
+  const { padding, chartWidth } = chartState;
+  const leftX = padding.left;
+  const rightX = padding.left + chartWidth;
+  const pts = drawing.points;
 
-  if (drawing.type === "horizontal" && drawing.points[0]) {
-    const y = yForPrice(drawing.points[0].price);
-    ctx.strokeStyle = isPreview ? "rgba(255, 209, 102, 0.6)" : "#ffd166";
+  if (drawing.type === "horizontal" && pts[0]) {
+    const y = yForPrice(pts[0].price);
+    ctx.strokeStyle = stroke;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(chartState.padding.left, y);
-    ctx.lineTo(chartState.padding.left + chartState.chartWidth, y);
+    ctx.moveTo(leftX, y);
+    ctx.lineTo(rightX, y);
     ctx.stroke();
-    drawPriceLabel(ctx, drawing.points[0].price, y, ctx.strokeStyle);
+    drawPriceLabel(ctx, pts[0].price, y, stroke);
     return;
   }
 
-  if (drawing.type === "trendline" && drawing.points.length >= 2) {
-    const [p1, p2] = drawing.points;
-    ctx.strokeStyle = isPreview ? "rgba(138, 180, 248, 0.6)" : "#8ab4f8";
+  if (drawing.type === "horizontal_ray" && pts[0]) {
+    const y = yForPrice(pts[0].price);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(xForPoint(pts[0]), y);
+    ctx.lineTo(rightX, y);
+    ctx.stroke();
+    drawPriceLabel(ctx, pts[0].price, y, stroke);
+    return;
+  }
+
+  if (drawing.type === "vertical" && pts[0]) {
+    const x = xForPoint(pts[0]);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, padding.top + chartState.chartHeight);
+    ctx.stroke();
+    return;
+  }
+
+  if (drawing.type === "crossline" && pts[0]) {
+    const x = xForPoint(pts[0]);
+    const y = yForPrice(pts[0].price);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(leftX, y);
+    ctx.lineTo(rightX, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, padding.top + chartState.chartHeight);
+    ctx.stroke();
+    drawPriceLabel(ctx, pts[0].price, y, stroke);
+    return;
+  }
+
+  if (drawing.type === "trendline" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    ctx.strokeStyle = stroke;
     ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(xForPoint(p1), yForPrice(p1.price));
@@ -970,14 +1259,97 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     return;
   }
 
-  if (drawing.type === "rectangle" && drawing.points.length >= 2) {
-    const [p1, p2] = drawing.points;
+  if (drawing.type === "ray" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    const targetX = x2 >= x1 ? rightX : leftX;
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(targetX, extendLineToX(x1, y1, x2, y2, targetX));
+    ctx.stroke();
+    return;
+  }
+
+  if (drawing.type === "extended_line" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(leftX, extendLineToX(x1, y1, x2, y2, leftX));
+    ctx.lineTo(rightX, extendLineToX(x1, y1, x2, y2, rightX));
+    ctx.stroke();
+    return;
+  }
+
+  if (drawing.type === "trend_angle" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    const angleDeg = (Math.atan2(-(y2 - y1), x2 - x1) * 180) / Math.PI;
+    ctx.fillStyle = stroke;
+    ctx.font = "11px Segoe UI, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`${angleDeg.toFixed(1)}°`, (x1 + x2) / 2 + 6, (y1 + y2) / 2 - 6);
+    return;
+  }
+
+  if (drawing.type === "info_line" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    const priceDelta = p2.price - p1.price;
+    const pctDelta = p1.price ? (priceDelta / p1.price) * 100 : 0;
+    const barDelta = Math.round(
+      fractionalIndexForTime(chartState.bars, p2.time) - fractionalIndexForTime(chartState.bars, p1.time)
+    );
+    const sign = priceDelta >= 0 ? "+" : "";
+    const label = `${sign}$${priceDelta.toFixed(2)} (${sign}${pctDelta.toFixed(2)}%), ${Math.abs(barDelta)} bars`;
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    ctx.font = "11px Segoe UI, sans-serif";
+    const textWidth = ctx.measureText(label).width;
+    ctx.fillStyle = "rgba(3, 8, 14, 0.85)";
+    ctx.fillRect(midX - textWidth / 2 - 4, midY - 20, textWidth + 8, 16);
+    ctx.fillStyle = stroke;
+    ctx.textAlign = "center";
+    ctx.fillText(label, midX, midY - 8);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  if (drawing.type === "rectangle" && pts.length >= 2) {
+    const [p1, p2] = pts;
     const x1 = xForPoint(p1);
     const x2 = xForPoint(p2);
     const y1 = yForPrice(p1.price);
     const y2 = yForPrice(p2.price);
-    ctx.fillStyle = isPreview ? "rgba(124, 240, 179, 0.08)" : "rgba(124, 240, 179, 0.14)";
-    ctx.strokeStyle = isPreview ? "rgba(124, 240, 179, 0.5)" : "#7cf0b3";
+    ctx.fillStyle = withAlpha(color, isPreview ? 0.08 : 0.14);
+    ctx.strokeStyle = stroke;
     ctx.setLineDash([]);
     const left = Math.min(x1, x2);
     const top = Math.min(y1, y2);
@@ -986,8 +1358,8 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     return;
   }
 
-  if (drawing.type === "fib" && drawing.points.length >= 2) {
-    const [p1, p2] = drawing.points;
+  if (drawing.type === "fib" && pts.length >= 2) {
+    const [p1, p2] = pts;
     const x1 = xForPoint(p1);
     const x2 = xForPoint(p2);
     const left = Math.min(x1, x2);
@@ -995,7 +1367,7 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].forEach((level) => {
       const price = p1.price + (p2.price - p1.price) * level;
       const y = yForPrice(price);
-      ctx.strokeStyle = isPreview ? "rgba(138, 180, 248, 0.5)" : "rgba(138, 180, 248, 0.85)";
+      ctx.strokeStyle = isPreview ? withAlpha(color, 0.5) : withAlpha(color, 0.85);
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       ctx.moveTo(left, y);
@@ -1010,9 +1382,9 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     return;
   }
 
-  if (drawing.type === "channel" && drawing.points.length >= 2) {
-    const [p1, p2, p3] = drawing.points;
-    ctx.strokeStyle = isPreview ? "rgba(138, 180, 248, 0.6)" : "#8ab4f8";
+  if (drawing.type === "parallel_channel" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    ctx.strokeStyle = stroke;
     ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(xForPoint(p1), yForPrice(p1.price));
@@ -1028,7 +1400,7 @@ function renderDrawing(ctx, drawing, isPreview = false) {
       ctx.lineTo(xForPoint(o2), yForPrice(o2.price));
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(138, 180, 248, 0.08)";
+      ctx.fillStyle = withAlpha(color, 0.08);
       ctx.beginPath();
       ctx.moveTo(xForPoint(p1), yForPrice(p1.price));
       ctx.lineTo(xForPoint(p2), yForPrice(p2.price));
@@ -1040,8 +1412,141 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     return;
   }
 
-  if (drawing.type === "text" && drawing.points[0]) {
-    const p = drawing.points[0];
+  if (drawing.type === "flat_channel" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    const x1 = xForPoint(p1);
+    const y1 = yForPrice(p1.price);
+    const x2 = xForPoint(p2);
+    const y2 = yForPrice(p2.price);
+    const leftSlopeY = extendLineToX(x1, y1, x2, y2, leftX);
+    const rightSlopeY = extendLineToX(x1, y1, x2, y2, rightX);
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(leftX, leftSlopeY);
+    ctx.lineTo(rightX, rightSlopeY);
+    ctx.stroke();
+
+    if (p3) {
+      const flatY = yForPrice(p3.price);
+      ctx.beginPath();
+      ctx.moveTo(leftX, flatY);
+      ctx.lineTo(rightX, flatY);
+      ctx.stroke();
+      ctx.fillStyle = withAlpha(color, 0.08);
+      ctx.beginPath();
+      ctx.moveTo(leftX, leftSlopeY);
+      ctx.lineTo(rightX, rightSlopeY);
+      ctx.lineTo(rightX, flatY);
+      ctx.lineTo(leftX, flatY);
+      ctx.closePath();
+      ctx.fill();
+    }
+    return;
+  }
+
+  if (drawing.type === "disjoint_channel" && pts.length >= 2) {
+    const [p1, p2, p3, p4] = pts;
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(xForPoint(p1), yForPrice(p1.price));
+    ctx.lineTo(xForPoint(p2), yForPrice(p2.price));
+    ctx.stroke();
+
+    if (p3) {
+      ctx.beginPath();
+      ctx.arc(xForPoint(p3), yForPrice(p3.price), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = stroke;
+      ctx.fill();
+    }
+    if (p4) {
+      ctx.beginPath();
+      ctx.moveTo(xForPoint(p3), yForPrice(p3.price));
+      ctx.lineTo(xForPoint(p4), yForPrice(p4.price));
+      ctx.stroke();
+      ctx.fillStyle = withAlpha(color, 0.08);
+      ctx.beginPath();
+      ctx.moveTo(xForPoint(p1), yForPrice(p1.price));
+      ctx.lineTo(xForPoint(p2), yForPrice(p2.price));
+      ctx.lineTo(xForPoint(p4), yForPrice(p4.price));
+      ctx.lineTo(xForPoint(p3), yForPrice(p3.price));
+      ctx.closePath();
+      ctx.fill();
+    }
+    return;
+  }
+
+  if (drawing.type === "regression" && pts.length >= 2) {
+    const [p1, p2] = pts;
+    const bars = chartState.bars;
+    let idx1 = Math.round(fractionalIndexForTime(bars, p1.time));
+    let idx2 = Math.round(fractionalIndexForTime(bars, p2.time));
+    if (idx1 > idx2) [idx1, idx2] = [idx2, idx1];
+    const reg = linearRegression(bars, idx1, idx2);
+    if (!reg) return;
+    let sumSq = 0;
+    for (let i = idx1; i <= idx2; i += 1) {
+      const predicted = reg.intercept + reg.slope * (i - idx1);
+      sumSq += (bars[i].close - predicted) ** 2;
+    }
+    const stddev = Math.sqrt(sumSq / reg.n);
+    const priceAt = (i) => reg.intercept + reg.slope * (i - idx1);
+    const start = { time: new Date(bars[idx1].timestamp).getTime(), price: priceAt(idx1) };
+    const end = { time: new Date(bars[idx2].timestamp).getTime(), price: priceAt(idx2) };
+    ctx.strokeStyle = stroke;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(xForPoint(start), yForPrice(start.price));
+    ctx.lineTo(xForPoint(end), yForPrice(end.price));
+    ctx.stroke();
+    ctx.strokeStyle = withAlpha(color, 0.5);
+    ctx.setLineDash([4, 3]);
+    [1, -1].forEach((sign) => {
+      const s = { time: start.time, price: start.price + sign * stddev };
+      const e = { time: end.time, price: end.price + sign * stddev };
+      ctx.beginPath();
+      ctx.moveTo(xForPoint(s), yForPrice(s.price));
+      ctx.lineTo(xForPoint(e), yForPrice(e.price));
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    return;
+  }
+
+  if (drawing.type === "pitchfork" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    renderPitchforkLines(ctx, p1, p2, p3 || p2, stroke);
+    return;
+  }
+
+  if (drawing.type === "schiff_pitchfork" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    const handle = { time: (p1.time + p2.time) / 2, price: (p1.price + p2.price) / 2 };
+    renderPitchforkLines(ctx, handle, p2, p3 || p2, stroke);
+    return;
+  }
+
+  if (drawing.type === "modified_schiff_pitchfork" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    const schiffHandle = { time: (p1.time + p2.time) / 2, price: (p1.price + p2.price) / 2 };
+    const handle = { time: (p1.time + schiffHandle.time) / 2, price: (p1.price + schiffHandle.price) / 2 };
+    renderPitchforkLines(ctx, handle, p2, p3 || p2, stroke);
+    return;
+  }
+
+  if (drawing.type === "inside_pitchfork" && pts.length >= 2) {
+    const [p1, p2, p3] = pts;
+    if (!p3) {
+      renderPitchforkLines(ctx, p1, p2, p2, stroke);
+      return;
+    }
+    renderPitchforkLines(ctx, p3, p1, p2, stroke);
+    return;
+  }
+
+  if (drawing.type === "text" && pts[0]) {
+    const p = pts[0];
     const x = xForPoint(p);
     const y = yForPrice(p.price);
     ctx.font = "12px Segoe UI, sans-serif";
@@ -1050,7 +1555,7 @@ function renderDrawing(ctx, drawing, isPreview = false) {
     ctx.fillRect(x - 4, y - 14, textWidth + 8, 18);
     ctx.strokeStyle = "rgba(190, 213, 230, 0.24)";
     ctx.strokeRect(x - 4, y - 14, textWidth + 8, 18);
-    ctx.fillStyle = "#eef6fb";
+    ctx.fillStyle = stroke;
     ctx.textAlign = "left";
     ctx.fillText(drawing.text, x, y);
   }
@@ -1864,14 +2369,87 @@ candlestickChart.addEventListener("dblclick", () => {
 });
 document.querySelector("#reset-zoom").addEventListener("click", resetChartZoom);
 
-document.querySelectorAll(".draw-btn").forEach((btn) => {
-  btn.addEventListener("click", () => setDrawTool(btn.dataset.tool));
+// Fixed-position (not absolute) and placed by JS from the toggle button's real
+// viewport position, with its max-height clamped to whatever space is actually
+// left below it - a long menu (25 tools) anchored with plain CSS `position:
+// absolute` can extend past the bottom of the viewport when the button itself
+// isn't near the top of the page, and items below the fold become unreachable
+// without scrolling the whole page (the menu's own internal scroll never gets a
+// chance to help, since the box itself starts off-screen).
+function positionDrawToolMenu() {
+  const toggle = document.querySelector("#draw-tool-toggle");
+  const menu = document.querySelector("#draw-tool-menu");
+  const rect = toggle.getBoundingClientRect();
+  const margin = 12;
+  menu.style.left = `${Math.round(rect.left)}px`;
+  menu.style.top = `${Math.round(rect.bottom + 6)}px`;
+  menu.style.maxHeight = `${Math.max(120, Math.round(window.innerHeight - rect.bottom - 6 - margin))}px`;
+}
+
+document.querySelector("#draw-tool-toggle").addEventListener("click", () => {
+  const menu = document.querySelector("#draw-tool-menu");
+  menu.hidden = !menu.hidden;
+  if (!menu.hidden) positionDrawToolMenu();
+});
+
+document.querySelectorAll(".draw-tool-item").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setDrawTool(btn.dataset.tool);
+    document.querySelector("#draw-tool-menu").hidden = true;
+  });
+});
+
+document.addEventListener("click", (event) => {
+  const picker = document.querySelector("#draw-tool-picker");
+  const menu = document.querySelector("#draw-tool-menu");
+  if (picker && !menu.hidden && !picker.contains(event.target)) menu.hidden = true;
+});
+
+document.querySelector("#erase-tool").addEventListener("click", () => setDrawTool("erase"));
+
+document.querySelector("#draw-color").addEventListener("input", (event) => {
+  activeDrawColor = event.target.value;
 });
 
 document.querySelector("#clear-drawings").addEventListener("click", () => {
   if (!chartState) return;
   drawingsBySymbol[chartState.symbol] = [];
   renderChart();
+});
+
+function resizeCandlestickCanvas() {
+  const canvas = document.querySelector("#candlestick-chart");
+  const wrap = document.querySelector(".chart-wrap");
+  const panel = document.querySelector("#section-chart");
+  if (panel.classList.contains("expanded")) {
+    const rect = wrap.getBoundingClientRect();
+    canvas.width = Math.max(320, Math.round(rect.width));
+    canvas.height = Math.max(240, Math.round(rect.height));
+  } else {
+    canvas.width = 1040;
+    canvas.height = 360;
+  }
+  if (chartState) renderChart();
+}
+
+function toggleChartExpanded() {
+  const panel = document.querySelector("#section-chart");
+  const backdrop = document.querySelector("#chart-expand-backdrop");
+  const button = document.querySelector("#toggle-chart-expand");
+  const expanding = !panel.classList.contains("expanded");
+  panel.classList.toggle("expanded", expanding);
+  backdrop.hidden = !expanding;
+  button.classList.toggle("active", expanding);
+  button.textContent = expanding ? "Collapse" : "Expand";
+  // Let the layout settle into its new (fixed-position full-viewport, or normal
+  // in-flow) size before measuring it for the canvas resize.
+  requestAnimationFrame(resizeCandlestickCanvas);
+}
+
+document.querySelector("#toggle-chart-expand").addEventListener("click", toggleChartExpanded);
+document.querySelector("#chart-expand-backdrop").addEventListener("click", toggleChartExpanded);
+window.addEventListener("resize", () => {
+  if (document.querySelector("#section-chart").classList.contains("expanded")) resizeCandlestickCanvas();
 });
 
 document.querySelector("#start-replay").addEventListener("click", armReplaySelection);
@@ -1890,6 +2468,12 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingDrawing) cancelPendingDrawing();
   if (event.key === "Escape" && awaitingReplayStart) stopReplay();
   if (event.key === "Escape" && replayState) exitReplay();
+  if (event.key === "Escape" && !document.querySelector("#draw-tool-menu").hidden) {
+    document.querySelector("#draw-tool-menu").hidden = true;
+  }
+  if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
+    toggleChartExpanded();
+  }
 });
 
 document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {

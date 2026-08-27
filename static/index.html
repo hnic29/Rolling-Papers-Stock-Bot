@@ -169,17 +169,44 @@
               <button id="refresh-chart" type="button">Refresh Chart</button>
               <button id="reset-zoom" type="button">Reset Zoom</button>
               <button id="start-replay" type="button" title="Step through this chart bar by bar to practice reading price action">Replay</button>
+              <button id="toggle-chart-expand" type="button" title="Open this chart in a larger view">Expand</button>
             </div>
           </div>
           <div class="drawing-toolbar" id="drawing-toolbar">
-            <button type="button" class="draw-btn active" data-tool="cursor" title="Pan / hover">Cursor</button>
-            <button type="button" class="draw-btn" data-tool="trendline" title="Trend line">Trend Line</button>
-            <button type="button" class="draw-btn" data-tool="horizontal" title="Horizontal support/resistance line">Horizontal</button>
-            <button type="button" class="draw-btn" data-tool="fib" title="Fibonacci retracement">Fibonacci</button>
-            <button type="button" class="draw-btn" data-tool="channel" title="Parallel channel">Channel</button>
-            <button type="button" class="draw-btn" data-tool="rectangle" title="Rectangle zone">Rectangle</button>
-            <button type="button" class="draw-btn" data-tool="text" title="Text annotation">Text</button>
-            <button type="button" class="draw-btn" data-tool="erase" title="Click a drawing to remove it">Erase</button>
+            <div class="draw-tool-picker" id="draw-tool-picker">
+              <button type="button" id="draw-tool-toggle">
+                <span id="draw-tool-label">Cursor</span> <span class="draw-tool-caret">&#9662;</span>
+              </button>
+              <div class="draw-tool-menu" id="draw-tool-menu" hidden>
+                <button type="button" class="draw-tool-item active" data-tool="cursor">Cursor</button>
+                <div class="draw-tool-group-label">Lines</div>
+                <button type="button" class="draw-tool-item" data-tool="trendline">Trendline</button>
+                <button type="button" class="draw-tool-item" data-tool="ray">Ray</button>
+                <button type="button" class="draw-tool-item" data-tool="info_line">Info line</button>
+                <button type="button" class="draw-tool-item" data-tool="extended_line">Extended line</button>
+                <button type="button" class="draw-tool-item" data-tool="trend_angle">Trend angle</button>
+                <button type="button" class="draw-tool-item" data-tool="horizontal">Horizontal line</button>
+                <button type="button" class="draw-tool-item" data-tool="horizontal_ray">Horizontal ray</button>
+                <button type="button" class="draw-tool-item" data-tool="vertical">Vertical line</button>
+                <button type="button" class="draw-tool-item" data-tool="crossline">Crossline</button>
+                <div class="draw-tool-group-label">Channels</div>
+                <button type="button" class="draw-tool-item" data-tool="parallel_channel">Parallel channel</button>
+                <button type="button" class="draw-tool-item" data-tool="regression">Regression trend</button>
+                <button type="button" class="draw-tool-item" data-tool="flat_channel">Flat top/bottom</button>
+                <button type="button" class="draw-tool-item" data-tool="disjoint_channel">Disjoint channel</button>
+                <div class="draw-tool-group-label">Pitchforks</div>
+                <button type="button" class="draw-tool-item" data-tool="pitchfork">Pitchfork</button>
+                <button type="button" class="draw-tool-item" data-tool="schiff_pitchfork">Schiff pitchfork</button>
+                <button type="button" class="draw-tool-item" data-tool="modified_schiff_pitchfork">Modified Schiff pitchfork</button>
+                <button type="button" class="draw-tool-item" data-tool="inside_pitchfork">Inside pitchfork</button>
+                <div class="draw-tool-group-label">Other</div>
+                <button type="button" class="draw-tool-item" data-tool="fib">Fibonacci retracement</button>
+                <button type="button" class="draw-tool-item" data-tool="rectangle">Rectangle</button>
+                <button type="button" class="draw-tool-item" data-tool="text">Text</button>
+              </div>
+            </div>
+            <label class="draw-color-label">Color <input type="color" id="draw-color" value="#8ab4f8" title="Color for new drawings" /></label>
+            <button type="button" id="erase-tool" data-tool="erase" title="Click a drawing to remove it">Erase</button>
             <button type="button" id="clear-drawings" title="Remove all drawings for this symbol">Clear All</button>
           </div>
           <div class="replay-toolbar" id="replay-toolbar" hidden>
@@ -211,6 +238,7 @@
             <div id="chart-tooltip" class="chart-tooltip" hidden></div>
           </div>
         </article>
+        <div class="chart-expand-backdrop" id="chart-expand-backdrop" hidden></div>
 
         <article class="panel positions-panel" id="section-positions">
           <div class="chart-header">
