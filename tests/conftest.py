@@ -25,3 +25,11 @@ def _fixed_session_secret(monkeypatch):
     value here makes that a no-op during tests, so the suite never touches the
     real .env or leaks a generated secret across runs."""
     monkeypatch.setattr(settings, "session_secret", "test-session-secret-not-for-production-use")
+
+
+@pytest.fixture(autouse=True)
+def _fixed_credentials_encryption_key(monkeypatch):
+    """Same reasoning as _fixed_session_secret above, for app.services.credentials'
+    lazily-generated Fernet master key - must be a valid Fernet key (not an
+    arbitrary string), so this one is pre-generated rather than typed by hand."""
+    monkeypatch.setattr(settings, "credentials_encryption_key", "kKDHz6r8JMVLgdUfyCbWGyQ31WPRkAQvz1PNgLXOCIU=")

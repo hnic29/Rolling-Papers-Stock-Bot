@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # in this file. Must stay stable across restarts, or every logged-in session
     # would be invalidated on every deploy.
     session_secret: str = ""
+    # Encrypts each person's own Alpaca/FMP keys at rest (app.services.credentials,
+    # Fernet symmetric encryption) once multi-user credential storage is in use.
+    # Same lazy generate-and-persist pattern as session_secret above - never checked
+    # into git, never stored in the database itself.
+    credentials_encryption_key: str = ""
     # Push notifications (app.services.notify). Empty topic = disabled. The server
     # default is the free public instance; point it at a self-hosted ntfy to go fully
     # private - the rest of the code doesn't change.

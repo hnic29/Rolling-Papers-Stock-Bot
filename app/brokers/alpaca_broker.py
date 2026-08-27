@@ -35,28 +35,50 @@ class BrokerUnavailable(RuntimeError):
 
 
 class AlpacaBroker:
-    def __init__(self) -> None:
-        if not settings.alpaca_api_key or not settings.alpaca_secret_key:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        paper: bool | None = None,
+        allow_live_trading: bool | None = None,
+    ) -> None:
+        # Any credential left unset falls back to the app-wide settings singleton -
+        # every existing bare AlpacaBroker() call site keeps working unchanged (still
+        # "the app's own account"). Passing credentials explicitly is what for_user()
+        # uses to build a broker scoped to one person's own Alpaca keys instead.
+        if api_key is None:
+            api_key = settings.alpaca_api_key
+        if secret_key is None:
+            secret_key = settings.alpaca_secret_key
+        if paper is None:
+            paper = settings.alpaca_paper
+        if allow_live_trading is None:
+            allow_live_trading = settings.allow_live_trading
+
+        if not api_key or not secret_key:
             raise BrokerUnavailable("Missing Alpaca API credentials. Add paper keys to .env.")
-        if not settings.alpaca_paper and not settings.allow_live_trading:
+        if not paper and not allow_live_trading:
             raise BrokerUnavailable("Live trading is blocked. Set ALLOW_LIVE_TRADING=true explicitly.")
 
-        self.client = TradingClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
-            paper=settings.alpaca_paper,
-        )
-        self.data_client = StockHistoricalDataClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
-        )
-        self.news_client = NewsClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
-        )
-        self.screener_client = ScreenerClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
+        self.client = TradingClient(api_key, secret_key, paper=paper)
+        self.data_client = StockHistoricalDataClient(api_key, secret_key)
+        self.news_client = NewsClient(api_key, secret_key)
+        self.screener_client = ScreenerClient(api_key, secret_key)
+
+    @classmethod
+    def for_user(cls, user_id: int) -> "AlpacaBroker":
+        """A broker scoped to one person's own Alpaca account, read from their
+        encrypted credentials (app.services.credentials) rather than the app-wide
+        settings singleton. Raises the same BrokerUnavailable as the no-args form
+        when that person hasn't connected an Alpaca account yet."""
+        from app.services import credentials  # deferred: avoids a circular import at module load
+
+        creds = credentials.get_credentials(user_id)
+        return cls(
+            api_key=creds["alpaca_api_key"],
+            secret_key=creds["alpaca_secret_key"],
+            paper=creds["alpaca_paper"],
+            allow_live_trading=creds["allow_live_trading"],
         )
 
     def account(self):
