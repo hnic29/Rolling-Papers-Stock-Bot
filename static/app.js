@@ -448,13 +448,123 @@ function startAutoRefresh(fn, intervalMs) {
 function setChartData(symbol, bars) {
   pendingDrawing = null;
   previewPoint = null;
+  stopReplay();
   chartState = { symbol, bars, view: { start: 0, end: bars.length } };
   renderChart();
 }
 
 function resetChartZoom() {
   if (!chartState) return;
+  stopReplay();
   chartState.view = { start: 0, end: chartState.bars.length };
+  renderChart();
+}
+
+// Bar replay: reuses the chart's own zoom view ({start, end} into chartState.bars) -
+// "replaying" is just growing view.end one step at a time and re-rendering, the same
+// mechanism the zoom/pan already relies on. Practice tool, not a strategy backtest:
+// this only reveals bars already fetched at whatever granularity the current range
+// uses (1-minute bars intraday, daily/weekly further out) - there's no per-second
+// data behind this app to replay at that resolution.
+let replayState = null; // { startIndex, currentIndex, playing }
+let replayIntervalId = null;
+let awaitingReplayStart = false;
+
+function barIndexFromCanvasXY(x) {
+  const { padding, candleStep, view, bars } = chartState;
+  const fracIndex = view.start + (x - padding.left) / candleStep;
+  return Math.max(0, Math.min(bars.length - 1, Math.round(fracIndex)));
+}
+
+function armReplaySelection() {
+  if (!chartState || !chartState.bars.length) {
+    document.querySelector("#message").textContent = "Load a chart before starting a replay.";
+    return;
+  }
+  pauseReplay();
+  awaitingReplayStart = true;
+  document.querySelector("#candlestick-chart").classList.add("replay-arming");
+  document.querySelector("#chart-hint").textContent = "Click a candle to start the replay from there.";
+}
+
+function startReplay(startIndex) {
+  awaitingReplayStart = false;
+  document.querySelector("#candlestick-chart").classList.remove("replay-arming");
+  const start = Math.max(MIN_VISIBLE_CANDLES, startIndex);
+  replayState = { startIndex: start, currentIndex: start, playing: false };
+  chartState.view.end = replayState.currentIndex;
+  document.querySelector("#replay-toolbar").hidden = false;
+  document.querySelector("#replay-play-pause").innerHTML = "&#9654;";
+  document.querySelector("#chart-hint").textContent = "Step or play through the chart. Exit Replay to see the full picture again.";
+  updateReplayPositionLabel();
+  renderChart();
+}
+
+function replayStepSize() {
+  return Number(document.querySelector("#replay-step-size").value);
+}
+
+function stepReplay(direction) {
+  if (!replayState || !chartState) return;
+  const next = replayState.currentIndex + direction * replayStepSize();
+  replayState.currentIndex = Math.max(MIN_VISIBLE_CANDLES, Math.min(chartState.bars.length, next));
+  chartState.view.end = replayState.currentIndex;
+  updateReplayPositionLabel();
+  renderChart();
+  if (replayState.currentIndex >= chartState.bars.length) pauseReplay();
+}
+
+function updateReplayPositionLabel() {
+  if (!replayState || !chartState) return;
+  const bar = chartState.bars[replayState.currentIndex - 1];
+  const label = bar
+    ? new Date(bar.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "-";
+  document.querySelector("#replay-position").textContent = `Bar ${replayState.currentIndex} of ${chartState.bars.length} - ${label}`;
+}
+
+function playReplay() {
+  if (!replayState || replayState.playing) return;
+  replayState.playing = true;
+  document.querySelector("#replay-play-pause").innerHTML = "&#9208;";
+  const speedMs = Number(document.querySelector("#replay-speed").value);
+  replayIntervalId = setInterval(() => stepReplay(1), speedMs);
+}
+
+function pauseReplay() {
+  if (!replayState) return;
+  replayState.playing = false;
+  document.querySelector("#replay-play-pause").innerHTML = "&#9654;";
+  if (replayIntervalId) {
+    clearInterval(replayIntervalId);
+    replayIntervalId = null;
+  }
+}
+
+function toggleReplayPlay() {
+  if (!replayState) return;
+  if (replayState.playing) pauseReplay();
+  else playReplay();
+}
+
+// Called whenever the chart data or zoom changes for a reason other than replay
+// itself (a new symbol/range, or Reset Zoom) - always safe to call even when no
+// replay is active.
+function stopReplay() {
+  pauseReplay();
+  awaitingReplayStart = false;
+  const canvas = document.querySelector("#candlestick-chart");
+  if (canvas) canvas.classList.remove("replay-arming");
+  if (replayState) {
+    replayState = null;
+    document.querySelector("#replay-toolbar").hidden = true;
+    document.querySelector("#chart-hint").textContent = DRAW_HINTS[activeDrawTool] || DRAW_HINTS.cursor;
+  }
+}
+
+function exitReplay() {
+  stopReplay();
+  if (chartState) chartState.view = { start: 0, end: chartState.bars.length };
   renderChart();
 }
 
@@ -717,7 +827,17 @@ function cancelPendingDrawing() {
 }
 
 function handleChartClick(event) {
-  if (!chartState || !chartState.padding || activeDrawTool === "cursor") return;
+  if (!chartState || !chartState.padding) return;
+
+  if (awaitingReplayStart) {
+    const { x, y } = eventToCanvasXY(event);
+    const { padding, chartWidth, chartHeight } = chartState;
+    if (x < padding.left || x > padding.left + chartWidth || y < padding.top || y > padding.top + chartHeight) return;
+    startReplay(barIndexFromCanvasXY(x));
+    return;
+  }
+
+  if (activeDrawTool === "cursor") return;
 
   const { x, y } = eventToCanvasXY(event);
   const { padding, chartWidth, chartHeight } = chartState;
@@ -1754,8 +1874,22 @@ document.querySelector("#clear-drawings").addEventListener("click", () => {
   renderChart();
 });
 
+document.querySelector("#start-replay").addEventListener("click", armReplaySelection);
+document.querySelector("#replay-step-back").addEventListener("click", () => stepReplay(-1));
+document.querySelector("#replay-step-forward").addEventListener("click", () => stepReplay(1));
+document.querySelector("#replay-play-pause").addEventListener("click", toggleReplayPlay);
+document.querySelector("#exit-replay").addEventListener("click", exitReplay);
+document.querySelector("#replay-speed").addEventListener("change", () => {
+  if (replayState && replayState.playing) {
+    pauseReplay();
+    playReplay(); // restart the interval so the new speed takes effect immediately
+  }
+});
+
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingDrawing) cancelPendingDrawing();
+  if (event.key === "Escape" && awaitingReplayStart) stopReplay();
+  if (event.key === "Escape" && replayState) exitReplay();
 });
 
 document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {

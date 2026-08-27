@@ -941,6 +941,71 @@ form {
   margin: -2px 0 10px;
 }
 
+.replay-toolbar[hidden] {
+  display: none;
+}
+
+.replay-toolbar {
+  align-items: center;
+  background: rgba(124, 240, 179, 0.06);
+  border: 1px solid rgba(124, 240, 179, 0.25);
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+}
+
+.replay-toolbar label {
+  align-items: center;
+  color: #a8b9c8;
+  display: flex;
+  flex-direction: row;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.replay-toolbar select {
+  min-height: auto;
+  padding: 4px 6px;
+}
+
+.replay-toolbar button {
+  background: rgba(190, 213, 230, 0.08);
+  border: 1px solid rgba(190, 213, 230, 0.16);
+  border-radius: 4px;
+  color: #eef6fb;
+  cursor: pointer;
+  font-size: 13px;
+  min-height: auto;
+  padding: 6px 10px;
+}
+
+.replay-toolbar button:hover {
+  background: rgba(190, 213, 230, 0.16);
+}
+
+#exit-replay {
+  border-color: rgba(255, 155, 155, 0.35);
+  color: #ff9b9b;
+  margin-left: auto;
+}
+
+#exit-replay:hover {
+  background: rgba(255, 155, 155, 0.14);
+}
+
+.replay-position {
+  color: #7cf0b3;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+#candlestick-chart.replay-arming {
+  cursor: crosshair;
+}
+
 .chart-wrap {
   position: relative;
 }

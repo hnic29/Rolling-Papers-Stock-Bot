@@ -168,6 +168,7 @@
               <label>Date <input id="chart-date" type="date" /></label>
               <button id="refresh-chart" type="button">Refresh Chart</button>
               <button id="reset-zoom" type="button">Reset Zoom</button>
+              <button id="start-replay" type="button" title="Step through this chart bar by bar to practice reading price action">Replay</button>
             </div>
           </div>
           <div class="drawing-toolbar" id="drawing-toolbar">
@@ -180,6 +181,29 @@
             <button type="button" class="draw-btn" data-tool="text" title="Text annotation">Text</button>
             <button type="button" class="draw-btn" data-tool="erase" title="Click a drawing to remove it">Erase</button>
             <button type="button" id="clear-drawings" title="Remove all drawings for this symbol">Clear All</button>
+          </div>
+          <div class="replay-toolbar" id="replay-toolbar" hidden>
+            <button type="button" id="replay-step-back" title="Step back">&#9198;</button>
+            <button type="button" id="replay-play-pause" title="Play/pause">&#9654;</button>
+            <button type="button" id="replay-step-forward" title="Step forward">&#9197;</button>
+            <label>Speed
+              <select id="replay-speed">
+                <option value="1500">0.5x</option>
+                <option value="800" selected>1x</option>
+                <option value="400">2x</option>
+                <option value="150">4x</option>
+              </select>
+            </label>
+            <label>Step
+              <select id="replay-step-size">
+                <option value="1" selected>1 bar</option>
+                <option value="5">5 bars</option>
+                <option value="15">15 bars</option>
+                <option value="60">60 bars</option>
+              </select>
+            </label>
+            <span id="replay-position" class="replay-position">-</span>
+            <button type="button" id="exit-replay">Exit Replay</button>
           </div>
           <p class="chart-hint" id="chart-hint">Scroll to zoom, drag to pan, double-click to reset zoom.</p>
           <div class="chart-wrap">
