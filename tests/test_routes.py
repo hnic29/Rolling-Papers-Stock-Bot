@@ -1,13 +1,26 @@
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.main import app
 from app.services import trade_log
+from app.services import users as users_service
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _authenticated(_isolated_trade_log_db):
+    """Every route below is now behind session auth. `_isolated_trade_log_db` (from
+    conftest.py) gives each test a fresh, empty users table, so log a throwaway
+    admin in fresh every test too - declared as a dependency (not just relying on
+    fixture ordering) so it always runs after the DB is pointed at tmp_path."""
+    users_service.create_user("test-admin", "test-password-123", is_admin=True)
+    response = client.post("/api/login", json={"username": "test-admin", "password": "test-password-123"})
+    assert response.status_code == 200
 
 
 def test_index_serves_the_dashboard_html():

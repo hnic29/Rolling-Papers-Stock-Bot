@@ -1,12 +1,22 @@
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.brokers.alpaca_broker import BrokerUnavailable
 from app.main import app
 from app.services import trade_log
+from app.services import users as users_service
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _authenticated(_isolated_trade_log_db):
+    """See test_routes.py's identical fixture for why this is needed per test."""
+    users_service.create_user("test-admin", "test-password-123", is_admin=True)
+    response = client.post("/api/login", json={"username": "test-admin", "password": "test-password-123"})
+    assert response.status_code == 200
 
 
 class _Broker:

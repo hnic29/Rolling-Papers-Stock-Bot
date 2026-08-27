@@ -1294,3 +1294,72 @@ td {
 #wizard-back {
   background: rgba(190, 213, 230, 0.1);
 }
+
+.session-user {
+  align-items: center;
+  color: #a8b9c8;
+  display: flex;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.auth-gate {
+  align-items: center;
+  background: #05080f;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 100;
+}
+
+.auth-gate[hidden] {
+  display: none;
+}
+
+.auth-gate-modal {
+  background: rgba(10, 18, 30, 0.97);
+  border: 1px solid rgba(190, 213, 230, 0.22);
+  border-radius: 12px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  max-width: 420px;
+  padding: 32px;
+  text-align: center;
+  width: 100%;
+}
+
+.auth-gate-modal h1 {
+  margin-bottom: 20px;
+}
+
+.auth-gate-modal .logo {
+  height: 64px;
+  margin: 0 auto;
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr;
+  text-align: left;
+}
+
+.auth-form h2 {
+  margin-bottom: 0;
+  text-align: center;
+}
+
+.auth-form[hidden] {
+  display: none;
+}
+
+.auth-form-error {
+  color: #ff8a8a;
+  font-size: 13px;
+  margin: 0;
+}
+
+.auth-form-error[hidden] {
+  display: none;
+}

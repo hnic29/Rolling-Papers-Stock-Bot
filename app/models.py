@@ -142,7 +142,6 @@ class AppSettingsResponse(BaseModel):
     alpaca_paper: bool = True
     fmp_api_key: str = ""
     allow_live_trading: bool = False
-    dashboard_username: str = ""
     ntfy_topic: str = ""
 
 
@@ -159,12 +158,28 @@ class AppSettingsUpdate(BaseModel):
     ntfy_topic: str = ""
 
 
-class DashboardAuthUpdate(BaseModel):
-    # Blank current_password is only accepted when no dashboard password is
-    # configured yet - see the check in main.update_dashboard_auth.
-    current_password: str = ""
-    new_username: str
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class BootstrapRequest(BaseModel):
+    """Creates the first (admin) account. Only accepted while zero users exist -
+    see main.bootstrap."""
+
+    username: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
     new_password: str
+
+
+class UserPublic(BaseModel):
+    id: int
+    username: str
+    is_admin: bool
 
 
 class BankrollTransaction(BaseModel):

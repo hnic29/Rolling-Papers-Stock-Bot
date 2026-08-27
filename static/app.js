@@ -20,6 +20,81 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
 }
 
+// Session-cookie login gate. Shown by default (see the `hidden`-less markup in
+// index.html) and only hidden once /api/me confirms a valid session - fail closed
+// if the auth check itself errors out, rather than risk flashing the dashboard.
+const authGateEl = document.querySelector("#auth-gate");
+const bootstrapForm = document.querySelector("#bootstrap-form");
+const loginForm = document.querySelector("#login-form");
+
+async function initAuthGate() {
+  try {
+    const status = await api("/api/auth/status");
+    if (status.needs_bootstrap) {
+      bootstrapForm.hidden = false;
+      return;
+    }
+  } catch (error) {
+    loginForm.hidden = false;
+    return;
+  }
+
+  try {
+    const me = await api("/api/me");
+    authGateEl.hidden = true;
+    document.querySelector("#session-username").hidden = false;
+    document.querySelector("#session-username").textContent = me.username;
+    document.querySelector("#logout").hidden = false;
+    document.querySelector("#settings-username").textContent = me.username;
+  } catch (error) {
+    loginForm.hidden = false;
+  }
+}
+
+bootstrapForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const errorEl = document.querySelector("#bootstrap-error");
+  errorEl.hidden = true;
+  try {
+    await api("/api/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+    });
+    window.location.reload();
+  } catch (error) {
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+  }
+});
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const errorEl = document.querySelector("#login-error");
+  errorEl.hidden = true;
+  try {
+    await api("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+    });
+    window.location.reload();
+  } catch (error) {
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+  }
+});
+
+document.querySelector("#logout").addEventListener("click", async () => {
+  try {
+    await api("/api/logout", { method: "POST" });
+  } finally {
+    window.location.reload();
+  }
+});
+
+initAuthGate();
+
 const WIZARD_DISMISS_KEY = "rolling_papers_bot_wizard_dismissed";
 
 const WIZARD_STEPS = [
@@ -284,15 +359,6 @@ async function loadSettings() {
     form.ntfy_topic.value = settings.ntfy_topic || "";
     form.alpaca_paper.checked = settings.alpaca_paper;
     form.allow_live_trading.checked = settings.allow_live_trading;
-
-    const authForm = document.querySelector("#dashboard-auth-form");
-    const hasAuth = Boolean(settings.dashboard_username);
-    authForm.new_username.value = settings.dashboard_username || "";
-    document.querySelector("#current-password-row").hidden = !hasAuth;
-    authForm.current_password.required = hasAuth;
-    document.querySelector("#dashboard-auth-hint").textContent = hasAuth
-      ? "Login is required to use this dashboard. Enter your current password to change it."
-      : "Not set up yet — anyone who can reach this dashboard can use it without logging in. Set a username and password below to require login.";
   } catch (error) {
     document.querySelector("#message").textContent = `Could not load settings: ${error.message}`;
   }
@@ -1488,33 +1554,24 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
   }
 });
 
-document.querySelector("#dashboard-auth-form").addEventListener("submit", async (event) => {
+document.querySelector("#change-password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const submitButton = form.querySelector('button[type="submit"]');
 
-  if (form.new_password.value !== form.confirm_password.value) {
-    document.querySelector("#message").textContent = "New password and confirmation don't match.";
-    return;
-  }
-
   if (submitButton) submitButton.disabled = true;
   try {
-    await api("/api/settings/dashboard-auth", {
+    await api("/api/me/password", {
       method: "POST",
       body: JSON.stringify({
         current_password: form.current_password.value,
-        new_username: form.new_username.value,
         new_password: form.new_password.value,
       }),
     });
-    form.current_password.value = "";
-    form.new_password.value = "";
-    form.confirm_password.value = "";
-    document.querySelector("#message").textContent = "Dashboard login updated — you'll be asked to log in again with your new credentials.";
-    await loadSettings();
+    form.reset();
+    document.querySelector("#message").textContent = "Password updated.";
   } catch (error) {
-    document.querySelector("#message").textContent = `Could not update dashboard login: ${error.message}`;
+    document.querySelector("#message").textContent = `Could not update password: ${error.message}`;
   } finally {
     if (submitButton) submitButton.disabled = false;
   }

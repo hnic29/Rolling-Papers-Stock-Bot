@@ -51,8 +51,10 @@ ALPACA_PAPER=true
 FMP_API_KEY=
 ALLOW_LIVE_TRADING=false
 TRADE_LOG_PATH=/var/lib/rolling-papers-bot/trade_log.db
-# Optional: set both to put the dashboard behind HTTP Basic Auth. Left blank,
-# it's open to anyone who can reach the URL.
+# The dashboard always requires login now (session-cookie auth, not HTTP Basic
+# Auth) - the first person to open it is walked through creating the admin
+# account. Leave these two blank; they're only read once, to auto-migrate an
+# account from an older deployment that had HTTP Basic Auth configured here.
 DASHBOARD_USERNAME=
 DASHBOARD_PASSWORD=
 ENVEOF

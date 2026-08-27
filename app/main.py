@@ -1,11 +1,10 @@
 import asyncio
 import re
-import secrets
 from contextlib import asynccontextmanager
 
 from alpaca.common.enums import Sort
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import UTC, date, datetime, time, timedelta
@@ -21,19 +20,27 @@ from app.models import (
     BankrollReturnRequest,
     BankrollStatus,
     BankrollWithdrawRequest,
+    BootstrapRequest,
     BotStatus,
-    DashboardAuthUpdate,
+    ChangePasswordRequest,
+    LoginRequest,
     ScannerRequest,
     TradeRequest,
+    UserPublic,
 )
 from app.paths import resource_path
-from app.services import bankroll, notify, trade_log, trade_sync
+from app.services import bankroll, notify, trade_log, trade_sync, users
 from app.services.backtest import run_daily_backtest
-from app.services.basic_auth import BasicAuthMiddleware
 from app.services.bot import bot
 from app.services.env_file import InvalidEnvValue, mask_secret, read_env, write_env
 from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
+from app.services.session_auth import (
+    SESSION_COOKIE_NAME,
+    SESSION_MAX_AGE_SECONDS,
+    SessionAuthMiddleware,
+    create_session_token,
+)
 
 
 def _sync_orders_headless() -> None:
@@ -66,13 +73,14 @@ async def _automation_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    users.migrate_legacy_dashboard_credentials()
     task = asyncio.create_task(_automation_loop())
     yield
     task.cancel()
 
 
 app = FastAPI(title="Rolling Papers Bot", version="0.1.0", lifespan=lifespan)
-app.add_middleware(BasicAuthMiddleware)
+app.add_middleware(SessionAuthMiddleware)
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 scanner = MarketScanner()
 MAX_BARS_LIMIT = 5000
@@ -149,9 +157,6 @@ def get_settings():
         alpaca_paper=values.get("ALPACA_PAPER", "true").lower() == "true",
         fmp_api_key=mask_secret(values.get("FMP_API_KEY", "")),
         allow_live_trading=values.get("ALLOW_LIVE_TRADING", "false").lower() == "true",
-        # Never the password - write-only, only ever set via
-        # update_dashboard_auth(), never echoed back once configured.
-        dashboard_username=values.get("DASHBOARD_USERNAME", ""),
         ntfy_topic=values.get("NTFY_TOPIC", ""),
     )
 
@@ -199,28 +204,67 @@ def save_settings(request: AppSettingsUpdate):
     return get_settings()
 
 
-@app.post("/api/settings/dashboard-auth", response_model=AppSettingsResponse)
-def update_dashboard_auth(request: DashboardAuthUpdate):
-    # BasicAuthMiddleware already requires valid credentials to reach this
-    # route at all once auth is on - this check is defense in depth on top
-    # of that (e.g. a browser tab left logged in), and the only way to set
-    # up auth for the first time when it's currently off.
-    if settings.dashboard_username:
-        if not secrets.compare_digest(request.current_password, settings.dashboard_password):
-            raise HTTPException(status_code=401, detail="Current password is incorrect.")
+def _set_session_cookie(response: Response, user_id: int) -> None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        create_session_token(user_id),
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
 
-    new_username = request.new_username.strip()
-    if not new_username:
+
+@app.get("/api/auth/status")
+def auth_status():
+    """Public: tells the dashboard whether to show the first-run "create an admin
+    account" screen or a normal login screen."""
+    return {"needs_bootstrap": users.count_users() == 0}
+
+
+@app.post("/api/bootstrap", response_model=UserPublic)
+def bootstrap(request: BootstrapRequest, response: Response):
+    if users.count_users() > 0:
+        raise HTTPException(status_code=403, detail="Setup has already been completed — log in instead.")
+    username = request.username.strip()
+    if not username:
         raise HTTPException(status_code=400, detail="Username can't be empty.")
-    if len(request.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    if len(request.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
 
-    try:
-        write_env({"DASHBOARD_USERNAME": new_username, "DASHBOARD_PASSWORD": request.new_password})
-    except InvalidEnvValue as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    reload_settings()
-    return get_settings()
+    user = users.create_user(username, request.password, is_admin=True)
+    _set_session_cookie(response, user["id"])
+    return UserPublic(id=user["id"], username=user["username"], is_admin=True)
+
+
+@app.post("/api/login", response_model=UserPublic)
+def login(request: LoginRequest, response: Response):
+    user = users.verify_password(request.username.strip(), request.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Incorrect username or password.")
+    _set_session_cookie(response, user["id"])
+    return UserPublic(id=user["id"], username=user["username"], is_admin=bool(user["is_admin"]))
+
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return {"message": "Logged out."}
+
+
+@app.get("/api/me", response_model=UserPublic)
+def me(request: Request):
+    return UserPublic(id=request.state.user_id, username=request.state.username, is_admin=request.state.is_admin)
+
+
+@app.post("/api/me/password")
+def change_my_password(request: Request, body: ChangePasswordRequest):
+    user = users.get_user_by_id(request.state.user_id)
+    if users.verify_password(user["username"], body.current_password) is None:
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    users.set_password(request.state.user_id, body.new_password)
+    return {"message": "Password updated."}
 
 
 def _bankroll_status() -> BankrollStatus:
