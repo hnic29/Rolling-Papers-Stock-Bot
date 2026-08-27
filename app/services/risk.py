@@ -1,10 +1,13 @@
-from app.config import settings
 from app.models import TradeRequest
 from app.services import bankroll
 
 
 class RiskManager:
-    def validate(self, trade: TradeRequest, trades_today: int, daily_pnl: float) -> None:
+    def validate(self, trade: TradeRequest, trades_today: int, daily_pnl: float, user_settings: dict, user_id: int = 1) -> None:
+        """user_settings is one person's own row from app.services.credentials
+        (max_trades_per_day, max_daily_loss_pct, max_position_value_pct) - these are
+        per-user limits, not a single deployment-wide policy, so nothing here reads
+        the global settings singleton."""
         if trade.side.value not in {"buy", "sell"}:
             raise ValueError("Only buy and sell orders can be submitted.")
         if trade.qty <= 0:
@@ -17,7 +20,7 @@ class RiskManager:
         if trade.side.value != "buy":
             return self._validate_bracket_prices(trade)
 
-        if trades_today >= settings.max_trades_per_day:
+        if trades_today >= user_settings["max_trades_per_day"]:
             raise ValueError("Max trades per day reached.")
 
         # Percentages of the current bankroll, not fixed dollars - see app.config's
@@ -27,15 +30,15 @@ class RiskManager:
         # cap) even when nothing has actually gone wrong, and a buy with no bankroll is
         # already correctly rejected downstream (bot._validate_against_bankroll) with a
         # much clearer message - this would just get there first with a worse one.
-        current_bankroll = bankroll.current_bankroll()
+        current_bankroll = bankroll.current_bankroll(user_id)
         if current_bankroll > 0:
-            max_daily_loss = current_bankroll * settings.max_daily_loss_pct / 100
+            max_daily_loss = current_bankroll * user_settings["max_daily_loss_pct"] / 100
             if daily_pnl <= -abs(max_daily_loss):
                 raise ValueError("Max daily loss reached.")
 
             if trade.estimated_price is not None:
                 estimated_position_value = trade.qty * trade.estimated_price
-                max_position_value = current_bankroll * settings.max_position_value_pct / 100
+                max_position_value = current_bankroll * user_settings["max_position_value_pct"] / 100
                 if estimated_position_value > max_position_value:
                     raise ValueError("Requested trade exceeds max position value setting.")
 

@@ -48,6 +48,13 @@ def _connect() -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {column} TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+    # Every trade before multi-user support belonged to the one account that existed
+    # then - DEFAULT 1 backfills that history under the same user id Stage 1 migrates
+    # the pre-existing dashboard login into (app.services.users.migrate_legacy_dashboard_credentials).
+    try:
+        conn.execute("ALTER TABLE trades ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn
 
 
@@ -60,6 +67,7 @@ def record_trade(
     stop_loss_price: float | None = None,
     take_profit_price: float | None = None,
     entry_price_estimate: float | None = None,
+    user_id: int = 1,
 ) -> None:
     """entry_price_estimate lets bankroll.deployed_capital() count a buy the moment it's
     submitted rather than only once it fills - without it, everything between submission
@@ -70,8 +78,8 @@ def record_trade(
         conn.execute(
             """
             INSERT OR REPLACE INTO trades
-                (order_id, submitted_at, symbol, side, qty, status, stop_loss_price, take_profit_price, entry_price_estimate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (order_id, submitted_at, symbol, side, qty, status, stop_loss_price, take_profit_price, entry_price_estimate, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order_id,
@@ -83,6 +91,7 @@ def record_trade(
                 stop_loss_price,
                 take_profit_price,
                 entry_price_estimate,
+                user_id,
             ),
         )
     conn.close()
@@ -135,19 +144,20 @@ def record_pending_exit(order_id: str, exit_order_id: str, exit_reason: str) -> 
     conn.close()
 
 
-def trades_with_pending_exit() -> list[dict]:
+def trades_with_pending_exit(user_id: int = 1) -> list[dict]:
     """Buy rows whose closing sell was submitted (exit_order_id set) but hasn't been
     confirmed filled yet (realized_pnl still NULL) - trade_sync polls these."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM trades WHERE side = 'buy' AND exit_order_id IS NOT NULL AND realized_pnl IS NULL"
+        "SELECT * FROM trades WHERE side = 'buy' AND exit_order_id IS NOT NULL AND realized_pnl IS NULL AND user_id = ?",
+        (user_id,),
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def open_filled_buys(symbol: str | None = None) -> list[dict]:
+def open_filled_buys(symbol: str | None = None, user_id: int = 1) -> list[dict]:
     """Filled buys whose exit hasn't been CONFIRMED (no realized P&L yet) - the lots a
     closing sell should link back to, and the ones position management still owns.
     Deliberately keyed on realized_pnl rather than exit_order_id: a lot with a pending
@@ -156,17 +166,17 @@ def open_filled_buys(symbol: str | None = None) -> list[dict]:
     later close's sell would never get linked at all. Oldest first, FIFO."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
-    query = "SELECT * FROM trades WHERE side = 'buy' AND status = 'filled' AND realized_pnl IS NULL"
-    params: tuple = ()
+    query = "SELECT * FROM trades WHERE side = 'buy' AND status = 'filled' AND realized_pnl IS NULL AND user_id = ?"
+    params: tuple = (user_id,)
     if symbol is not None:
         query += " AND symbol = ?"
-        params = (symbol.upper(),)
+        params = (user_id, symbol.upper())
     rows = conn.execute(query + " ORDER BY submitted_at ASC", params).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def trades_awaiting_exit() -> list[dict]:
+def trades_awaiting_exit(user_id: int = 1) -> list[dict]:
     """Filled bracket trades (a stop loss or take profit was attached) whose exit leg
     hasn't filled yet, so the sync route knows to keep checking their child orders."""
     conn = _connect()
@@ -177,28 +187,33 @@ def trades_awaiting_exit() -> list[dict]:
         WHERE status = 'filled'
           AND exit_order_id IS NULL
           AND (stop_loss_price IS NOT NULL OR take_profit_price IS NOT NULL)
-        """
+          AND user_id = ?
+        """,
+        (user_id,),
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def list_trades(limit: int = 100) -> list[dict]:
+def list_trades(limit: int = 100, user_id: int = 1) -> list[dict]:
     conn = _connect()
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM trades ORDER BY submitted_at DESC LIMIT ?", (limit,)).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM trades WHERE user_id = ? ORDER BY submitted_at DESC LIMIT ?", (user_id, limit)
+    ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def todays_realized_trades(trading_day: date) -> list[dict]:
+def todays_realized_trades(trading_day: date, user_id: int = 1) -> list[dict]:
     """Exits filled today (market time), oldest first — used to evaluate the daily
     walk-away rules (peak-profit giveback, consecutive losses) against real fills
     rather than in-memory state that wouldn't survive a restart."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM trades WHERE realized_pnl IS NOT NULL AND exit_at IS NOT NULL ORDER BY exit_at ASC"
+        "SELECT * FROM trades WHERE realized_pnl IS NOT NULL AND exit_at IS NOT NULL AND user_id = ? ORDER BY exit_at ASC",
+        (user_id,),
     ).fetchall()
     conn.close()
 
@@ -212,12 +227,12 @@ def todays_realized_trades(trading_day: date) -> list[dict]:
     return result
 
 
-def todays_submitted_trades(trading_day: date) -> list[dict]:
+def todays_submitted_trades(trading_day: date, user_id: int = 1) -> list[dict]:
     """Every order submitted today (market time), oldest first — used for the
     "no trade in over an hour" walk-away rule."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM trades ORDER BY submitted_at ASC").fetchall()
+    rows = conn.execute("SELECT * FROM trades WHERE user_id = ? ORDER BY submitted_at ASC", (user_id,)).fetchall()
     conn.close()
 
     result = []
@@ -230,7 +245,7 @@ def todays_submitted_trades(trading_day: date) -> list[dict]:
     return result
 
 
-def pending_buy_symbols() -> set[str]:
+def pending_buy_symbols(user_id: int = 1) -> set[str]:
     """Symbols with a buy order submitted but not yet in a terminal state (filled,
     canceled, rejected, expired) - i.e. still resting at the broker. An unfilled limit
     order (routine in premarket, where a fill can take minutes) doesn't show up in
@@ -242,16 +257,19 @@ def pending_buy_symbols() -> set[str]:
     conn = _connect()
     placeholders = ",".join("?" * len(TERMINAL_STATUSES))
     rows = conn.execute(
-        f"SELECT DISTINCT symbol FROM trades WHERE side = 'buy' AND status NOT IN ({placeholders})",
-        tuple(TERMINAL_STATUSES),
+        f"SELECT DISTINCT symbol FROM trades WHERE side = 'buy' AND status NOT IN ({placeholders}) AND user_id = ?",
+        tuple(TERMINAL_STATUSES) + (user_id,),
     ).fetchall()
     conn.close()
     return {row[0] for row in rows}
 
 
-def pending_order_ids() -> list[str]:
+def pending_order_ids(user_id: int = 1) -> list[str]:
     conn = _connect()
     placeholders = ",".join("?" * len(TERMINAL_STATUSES))
-    rows = conn.execute(f"SELECT order_id FROM trades WHERE status NOT IN ({placeholders})", tuple(TERMINAL_STATUSES)).fetchall()
+    rows = conn.execute(
+        f"SELECT order_id FROM trades WHERE status NOT IN ({placeholders}) AND user_id = ?",
+        tuple(TERMINAL_STATUSES) + (user_id,),
+    ).fetchall()
     conn.close()
     return [row[0] for row in rows]

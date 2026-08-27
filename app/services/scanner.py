@@ -60,17 +60,21 @@ def _session_progress_fraction(now: datetime) -> float:
 
 
 class MarketScanner:
-    def __init__(self) -> None:
+    def __init__(self, user_id: int = 1) -> None:
+        self.user_id = user_id
         self.strategy = SmallAccountPullbackStrategy()
         self.universe_path = resource_path("data/stock_universe.txt")
         self.metadata_path = resource_path("data/symbol_metadata.csv")
+
+    def _broker(self) -> AlpacaBroker:
+        return AlpacaBroker.for_user(self.user_id)
 
     def scan(self, symbols: list[str]) -> ScannerResponse:
         clean_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
         if not clean_symbols:
             return ScannerResponse(results=[])
 
-        broker = AlpacaBroker()
+        broker = self._broker()
         # Offset past Alpaca's free-tier SIP recency restriction (see
         # SIP_RECENCY_BUFFER_MINUTES) - session_progress is computed against this SAME
         # timestamp, not literal now(), so the proration matches what the data actually
@@ -212,7 +216,7 @@ class MarketScanner:
         if not symbols:
             return []
 
-        broker = AlpacaBroker()
+        broker = self._broker()
         surviving: list[tuple[float, str, float, int]] = []  # (gap_pct, symbol, price, iex_volume)
         for i in range(0, len(symbols), SWEEP_CHUNK_SIZE):
             chunk = symbols[i : i + SWEEP_CHUNK_SIZE]
@@ -319,7 +323,7 @@ class MarketScanner:
         if _tradable_symbols_cache["date"] == today and _tradable_symbols_cache["symbols"]:
             return _tradable_symbols_cache["symbols"]
         try:
-            symbols = AlpacaBroker().all_tradable_symbols()
+            symbols = self._broker().all_tradable_symbols()
         except Exception:
             return _tradable_symbols_cache["symbols"]  # stale beats nothing mid-day
         _tradable_symbols_cache["date"] = today
@@ -340,7 +344,7 @@ class MarketScanner:
         if not symbols:
             return set(), 0
 
-        broker = AlpacaBroker()
+        broker = self._broker()
         end = datetime.now(UTC) - timedelta(minutes=SIP_RECENCY_BUFFER_MINUTES)
         start = end - timedelta(days=40)  # ~AVG_VOLUME_WINDOW trading days plus buffer
         session_progress = _session_progress_fraction(end)
@@ -400,7 +404,7 @@ class MarketScanner:
         the strategy's minimum move. Failure-tolerant - a screener hiccup just means this
         cycle scans the static universe alone, same as before this existed."""
         try:
-            gainers = AlpacaBroker().top_gainers(top=50)
+            gainers = self._broker().top_gainers(top=50)
         except Exception:
             return set()
 

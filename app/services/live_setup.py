@@ -3,7 +3,6 @@ from zoneinfo import ZoneInfo
 
 from alpaca.common.enums import Sort
 
-from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import Candle, PullbackSetup, StockCandidate
 from app.services.scanner import MarketScanner
 
@@ -106,7 +105,7 @@ def build_pullback_setup(symbol: str, scanner: MarketScanner, candidate: StockCa
             is_leading_gainer=False,
         )
 
-    broker = AlpacaBroker()
+    broker = scanner._broker()
     end = datetime.now(UTC)
     start = end - timedelta(days=5)
     # DESC + reverse (handled inside historical_bars) gets the most recent bars even

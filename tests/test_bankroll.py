@@ -164,3 +164,17 @@ def test_a_buy_with_a_confirmed_exit_stops_counting_as_deployed():
     _closed_trade("buy-1", "ACHR", 100, 5.0, realized_pnl=25.0)
 
     assert bankroll.deployed_capital() == 0.0
+
+
+def test_bankrolls_are_fully_isolated_between_users():
+    bankroll.record_withdrawal(1000, account_equity=5000, user_id=1)
+    bankroll.record_withdrawal(2000, account_equity=5000, user_id=2)
+    trade_log.record_trade(order_id="alice-buy", symbol="AAPL", side="buy", qty=10, status="filled", user_id=1)
+    trade_log.update_fill(order_id="alice-buy", status="filled", filled_avg_price=50.0, filled_qty=10, filled_at=datetime.now(UTC).isoformat())
+
+    assert bankroll.current_bankroll(user_id=1) == 1000.0
+    assert bankroll.current_bankroll(user_id=2) == 2000.0
+    assert bankroll.deployed_capital(user_id=1) == 500.0
+    assert bankroll.deployed_capital(user_id=2) == 0.0
+    assert len(bankroll.transactions(user_id=1)) == 1
+    assert len(bankroll.transactions(user_id=2)) == 1

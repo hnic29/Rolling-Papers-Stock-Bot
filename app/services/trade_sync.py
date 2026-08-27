@@ -25,9 +25,10 @@ def _enum_str(value) -> str:
     return str(value.value if hasattr(value, "value") else value)
 
 
-def _notify_exit(symbol: str, exit_reason: str, exit_price: float, exit_qty: float, realized_pnl: float) -> None:
+def _notify_exit(topic: str, symbol: str, exit_reason: str, exit_price: float, exit_qty: float, realized_pnl: float) -> None:
     sign = "+" if realized_pnl >= 0 else "-"
     notify.send(
+        topic,
         f"{'Won' if realized_pnl >= 0 else 'Lost'} {sign}${abs(realized_pnl):,.2f} on {symbol}",
         f"{symbol} {_EXIT_REASON_LABELS.get(exit_reason, exit_reason)}: "
         f"sold {exit_qty:g} @ ${exit_price:,.2f}, realized {sign}${abs(realized_pnl):,.2f}",
@@ -35,12 +36,13 @@ def _notify_exit(symbol: str, exit_reason: str, exit_price: float, exit_qty: flo
     )
 
 
-def sync_orders(broker: AlpacaBroker) -> None:
-    """One reconciliation pass. Each phase tolerates per-order failures — one
-    unreachable order should never stall syncing the rest."""
+def sync_orders(broker: AlpacaBroker, user_id: int = 1, ntfy_topic: str = "") -> None:
+    """One reconciliation pass for one user's own trades, against their own broker.
+    Each phase tolerates per-order failures — one unreachable order should never
+    stall syncing the rest."""
 
     # Phase 1: entry fills — pending orders that may have filled/canceled since last look.
-    for order_id in trade_log.pending_order_ids():
+    for order_id in trade_log.pending_order_ids(user_id):
         try:
             order = broker.get_order(order_id)
         except Exception:
@@ -54,7 +56,7 @@ def sync_orders(broker: AlpacaBroker) -> None:
         )
 
     # Phase 2: bracket-leg exits — a resting stop/target child order filled.
-    for trade in trade_log.trades_awaiting_exit():
+    for trade in trade_log.trades_awaiting_exit(user_id):
         try:
             order = broker.get_order(trade["order_id"])
         except Exception:
@@ -79,11 +81,11 @@ def sync_orders(broker: AlpacaBroker) -> None:
             exit_reason=exit_reason,
             realized_pnl=round(pnl, 2),
         )
-        _notify_exit(trade["symbol"], exit_reason, exit_price, exit_qty, round(pnl, 2))
+        _notify_exit(ntfy_topic, trade["symbol"], exit_reason, exit_price, exit_qty, round(pnl, 2))
 
     # Phase 3: standalone closing sells — position management submitted a market sell
     # and linked it via record_pending_exit; complete the exit once that sell fills.
-    for trade in trade_log.trades_with_pending_exit():
+    for trade in trade_log.trades_with_pending_exit(user_id):
         try:
             exit_order = broker.get_order(trade["exit_order_id"])
         except Exception:
@@ -105,4 +107,4 @@ def sync_orders(broker: AlpacaBroker) -> None:
             exit_reason=trade["exit_reason"] or "exit_signal",
             realized_pnl=round(pnl, 2),
         )
-        _notify_exit(trade["symbol"], trade["exit_reason"] or "exit_signal", exit_price, exit_qty, round(pnl, 2))
+        _notify_exit(ntfy_topic, trade["symbol"], trade["exit_reason"] or "exit_signal", exit_price, exit_qty, round(pnl, 2))

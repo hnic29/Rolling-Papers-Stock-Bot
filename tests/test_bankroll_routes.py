@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.brokers.alpaca_broker import BrokerUnavailable
+from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.main import app
 from app.services import trade_log
 from app.services import users as users_service
@@ -34,7 +34,7 @@ class _UnavailableBroker:
 
 def test_get_bankroll_starts_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", lambda: _Broker())
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _Broker()))
 
     response = client.get("/api/bankroll")
 
@@ -48,7 +48,7 @@ def test_get_bankroll_starts_empty(monkeypatch, tmp_path):
 
 def test_withdraw_increases_the_bankroll_and_reduces_savings(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", lambda: _Broker(equity="50000.00"))
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _Broker(equity="50000.00")))
 
     response = client.post("/api/bankroll/withdraw", json={"amount": 2000, "note": "starting bankroll"})
 
@@ -63,7 +63,7 @@ def test_withdraw_increases_the_bankroll_and_reduces_savings(monkeypatch, tmp_pa
 
 def test_withdraw_rejects_more_than_whats_in_the_account(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", lambda: _Broker(equity="1000.00"))
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _Broker(equity="1000.00")))
 
     response = client.post("/api/bankroll/withdraw", json={"amount": 2000})
 
@@ -73,7 +73,7 @@ def test_withdraw_rejects_more_than_whats_in_the_account(monkeypatch, tmp_path):
 
 def test_withdraw_requires_a_configured_broker(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", _UnavailableBroker)
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _UnavailableBroker()))
 
     response = client.post("/api/bankroll/withdraw", json={"amount": 2000})
 
@@ -83,7 +83,7 @@ def test_withdraw_requires_a_configured_broker(monkeypatch, tmp_path):
 
 def test_return_to_savings_decreases_the_bankroll(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", lambda: _Broker(equity="50000.00"))
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _Broker(equity="50000.00")))
     client.post("/api/bankroll/withdraw", json={"amount": 2000})
 
     response = client.post("/api/bankroll/return", json={"amount": 500})
@@ -96,7 +96,7 @@ def test_return_to_savings_decreases_the_bankroll(monkeypatch, tmp_path):
 
 def test_return_to_savings_rejects_more_than_available(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", lambda: _Broker(equity="50000.00"))
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _Broker(equity="50000.00")))
     client.post("/api/bankroll/withdraw", json={"amount": 2000})
 
     response = client.post("/api/bankroll/return", json={"amount": 2001})
@@ -109,7 +109,7 @@ def test_get_bankroll_still_works_when_broker_is_unavailable(monkeypatch, tmp_pa
     """Savings balance just can't be computed - shouldn't break the rest of
     the bankroll panel (which is otherwise fully self-contained)."""
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.main.AlpacaBroker", _UnavailableBroker)
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: _UnavailableBroker()))
 
     response = client.get("/api/bankroll")
 

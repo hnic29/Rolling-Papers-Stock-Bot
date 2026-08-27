@@ -1,7 +1,7 @@
 import pytest
 
 from app.config import settings
-from app.services import trade_log
+from app.services import bot_registry, trade_log
 
 
 @pytest.fixture(autouse=True)
@@ -33,3 +33,12 @@ def _fixed_credentials_encryption_key(monkeypatch):
     lazily-generated Fernet master key - must be a valid Fernet key (not an
     arbitrary string), so this one is pre-generated rather than typed by hand."""
     monkeypatch.setattr(settings, "credentials_encryption_key", "kKDHz6r8JMVLgdUfyCbWGyQ31WPRkAQvz1PNgLXOCIU=")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_bot_registry(monkeypatch):
+    """app.services.bot_registry caches one TradingBot per user_id at module scope for
+    the life of the process - without resetting it, a bot instance built against one
+    test's isolated DB_PATH/tmp_path would leak into the next test entirely by
+    accident, since get_bot() would just return the cached (stale) instance."""
+    monkeypatch.setattr(bot_registry, "_bots", {})

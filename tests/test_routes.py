@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.main import app
-from app.services import trade_log
+from app.services import credentials, trade_log
 from app.services import users as users_service
 
 client = TestClient(app)
@@ -56,6 +56,8 @@ def test_account_returns_400_when_broker_is_unavailable(monkeypatch):
         def __init__(self):
             raise BrokerUnavailable("no Alpaca credentials configured")
 
+        for_user = classmethod(lambda cls, user_id: cls())
+
     monkeypatch.setattr("app.main.AlpacaBroker", UnavailableBroker)
 
     response = client.get("/api/account")
@@ -67,6 +69,8 @@ def test_account_returns_502_not_a_raw_traceback_on_unexpected_broker_failure(mo
     class BoomBroker:
         def account(self):
             raise RuntimeError("connection reset")
+
+        for_user = classmethod(lambda cls, user_id: cls())
 
     monkeypatch.setattr("app.main.AlpacaBroker", BoomBroker)
 
@@ -80,6 +84,8 @@ def test_settings_test_reports_unconfigured_keys_as_not_configured(monkeypatch):
     class UnavailableBroker:
         def __init__(self):
             raise BrokerUnavailable("no Alpaca credentials configured")
+
+        for_user = classmethod(lambda cls, user_id: cls())
 
     class UnconfiguredFmp:
         configured = False
@@ -101,6 +107,8 @@ def test_settings_test_reports_a_working_alpaca_key(monkeypatch):
         def account(self):
             return SimpleNamespace(status="ACTIVE")
 
+        for_user = classmethod(lambda cls, user_id: cls())
+
     class UnconfiguredFmp:
         configured = False
 
@@ -119,6 +127,8 @@ def test_settings_test_reports_a_rejected_alpaca_key_without_a_raw_traceback(mon
     class RejectingBroker:
         def account(self):
             raise RuntimeError("401 unauthorized")
+
+        for_user = classmethod(lambda cls, user_id: cls())
 
     class UnconfiguredFmp:
         configured = False
@@ -140,6 +150,8 @@ def test_settings_test_reports_a_working_fmp_key(monkeypatch):
         def __init__(self):
             raise BrokerUnavailable("no Alpaca credentials configured")
 
+        for_user = classmethod(lambda cls, user_id: cls())
+
     class WorkingFmp:
         configured = True
 
@@ -160,6 +172,8 @@ def test_positions_returns_502_not_a_raw_traceback_on_unexpected_broker_failure(
     class BoomBroker:
         def positions_as_dicts(self):
             raise RuntimeError("connection reset")
+
+        for_user = classmethod(lambda cls, user_id: cls())
 
     monkeypatch.setattr("app.main.AlpacaBroker", BoomBroker)
 
@@ -257,6 +271,8 @@ def test_sync_records_the_exit_leg_of_a_filled_bracket_trade(monkeypatch, tmp_pa
         def get_order(self, order_id):
             return parent_order
 
+        for_user = classmethod(lambda cls, user_id: cls())
+
     monkeypatch.setattr("app.main.AlpacaBroker", FakeBroker)
 
     response = client.post("/api/trades/history/sync")
@@ -268,10 +284,8 @@ def test_sync_records_the_exit_leg_of_a_filled_bracket_trade(monkeypatch, tmp_pa
     assert trade["realized_pnl"] == 0.34
 
 
-def test_settings_get_masks_secrets_and_never_returns_them_raw(monkeypatch, tmp_path):
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("ALPACA_API_KEY=PKTESTSECRETVALUE1234\nALPACA_PAPER=true\n", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
+def test_settings_get_masks_secrets_and_never_returns_them_raw():
+    credentials.save_credentials(user_id=1, alpaca_api_key="PKTESTSECRETVALUE1234", alpaca_paper=True)
 
     response = client.get("/api/settings")
 
@@ -281,11 +295,7 @@ def test_settings_get_masks_secrets_and_never_returns_them_raw(monkeypatch, tmp_
     assert body["alpaca_api_key"].startswith("PKTE")
 
 
-def test_settings_post_writes_only_to_the_env_file_not_elsewhere(monkeypatch, tmp_path):
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
+def test_settings_post_saves_only_to_this_users_own_credentials():
     response = client.post(
         "/api/settings",
         json={
@@ -298,14 +308,11 @@ def test_settings_post_writes_only_to_the_env_file_not_elsewhere(monkeypatch, tm
     )
 
     assert response.status_code == 200
-    assert "PKNEWTESTKEY000000" in fake_env.read_text(encoding="utf-8")
+    assert credentials.get_credentials(user_id=1)["alpaca_api_key"] == "PKNEWTESTKEY000000"
+    assert credentials.get_credentials(user_id=2)["alpaca_api_key"] == ""  # another user's row is untouched
 
 
-def test_settings_post_strips_a_pasted_label_off_the_key(monkeypatch, tmp_path):
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
+def test_settings_post_strips_a_pasted_label_off_the_key():
     response = client.post(
         "/api/settings",
         json={
@@ -318,34 +325,8 @@ def test_settings_post_strips_a_pasted_label_off_the_key(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    saved = fake_env.read_text(encoding="utf-8")
-    assert "FMP_API_KEY=TestKeyNotARealCredential123" in saved
-    assert "apikey" not in saved.lower()
-
-
-def test_settings_post_rejects_a_newline_smuggled_config_injection(monkeypatch, tmp_path):
-    """A value like "key\\nALLOW_LIVE_TRADING=true" would otherwise land as
-    its own line in the config file on the next write, letting this endpoint
-    set arbitrary settings it was never meant to accept - including
-    ALLOW_LIVE_TRADING itself, or DASHBOARD_USERNAME/PASSWORD."""
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("EXISTING=untouched\n", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
-    response = client.post(
-        "/api/settings",
-        json={
-            "alpaca_api_key": "fakekey123\nALLOW_LIVE_TRADING=true\nDASHBOARD_USERNAME=attacker",
-            "alpaca_secret_key": "",
-            "alpaca_paper": True,
-            "fmp_api_key": "",
-            "allow_live_trading": False,
-        },
-    )
-
-    assert response.status_code == 400
-    saved = fake_env.read_text(encoding="utf-8")
-    assert saved == "EXISTING=untouched\n"  # file untouched - no partial/injected write
+    saved = credentials.get_credentials(user_id=1)
+    assert saved["fmp_api_key"] == "TestKeyNotARealCredential123"
 
 
 def _live_settings_payload(confirm=None):
@@ -361,40 +342,28 @@ def _live_settings_payload(confirm=None):
     return payload
 
 
-def test_settings_post_refuses_to_arm_live_trading_without_explicit_confirmation(monkeypatch, tmp_path):
+def test_settings_post_refuses_to_arm_live_trading_without_explicit_confirmation():
     """Two mis-clicked checkboxes (or a bare API call) must never be enough to put real
     money in play - arming live trading requires an explicit confirmation flag."""
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
     response = client.post("/api/settings", json=_live_settings_payload())
 
     assert response.status_code == 400
     assert "LIVE" in response.json()["detail"]
-    assert fake_env.read_text(encoding="utf-8") == ""  # nothing written
+    assert credentials.get_credentials(user_id=1)["allow_live_trading"] is False  # nothing saved
 
 
-def test_settings_post_arms_live_trading_with_explicit_confirmation(monkeypatch, tmp_path):
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
+def test_settings_post_arms_live_trading_with_explicit_confirmation():
     response = client.post("/api/settings", json=_live_settings_payload(confirm=True))
 
     assert response.status_code == 200
-    saved = fake_env.read_text(encoding="utf-8")
-    assert "ALPACA_PAPER=false" in saved
-    assert "ALLOW_LIVE_TRADING=true" in saved
+    saved = credentials.get_credentials(user_id=1)
+    assert saved["alpaca_paper"] is False
+    assert saved["allow_live_trading"] is True
 
 
-def test_settings_post_needs_no_confirmation_while_staying_paper(monkeypatch, tmp_path):
+def test_settings_post_needs_no_confirmation_while_staying_paper():
     """The allow flag alone (paper still on) doesn't arm anything - the broker gate
     needs BOTH - so it shouldn't demand the scary confirmation either."""
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("", encoding="utf-8")
-    monkeypatch.setattr("app.services.env_file.ENV_PATH", fake_env)
-
     payload = _live_settings_payload()
     payload["alpaca_paper"] = True
 

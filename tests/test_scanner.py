@@ -52,7 +52,7 @@ def test_relative_volume_is_prorated_by_time_of_day(monkeypatch):
     bars = {"ACHR": [_bar(10.0, 1_000_000) for _ in range(20)] + [_bar(10.5, 500_000)]}
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
+    with patch.object(scanner, "_broker", return_value=_mock_broker(bars)):
         response = scanner.scan(["ACHR"])
 
     assert len(response.results) == 1
@@ -75,7 +75,7 @@ def test_relative_volume_average_uses_only_the_last_20_trading_days(monkeypatch)
     }
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
+    with patch.object(scanner, "_broker", return_value=_mock_broker(bars)):
         response = scanner.scan(["ACHR"])
 
     # 5,000,000 / 1,000,000 = 5.0 if only the last 20 days count; including the older,
@@ -100,7 +100,7 @@ def test_scan_queries_past_the_sip_recency_restriction(monkeypatch):
     broker.latest_news.side_effect = Exception("no news in test")
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         scanner.scan(["ACHR"])
     after_call = datetime.now(UTC)
 
@@ -128,7 +128,7 @@ def test_todays_gainers_filters_to_tradeable_common_shares():
     ]
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         picked = scanner.todays_gainers()
 
     assert picked == {"XPON"}
@@ -141,7 +141,7 @@ def test_todays_gainers_is_empty_when_the_screener_fails():
     broker.top_gainers.side_effect = Exception("screener down")
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         assert scanner.todays_gainers() == set()
 
 
@@ -200,7 +200,7 @@ def test_full_market_sweep_finds_a_qualifying_mover_across_the_whole_market(monk
     broker.daily_bars.side_effect = lambda symbols, start, end: SimpleNamespace(
         data={s: bars_by_symbol[s] for s in symbols}
     )
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         hits, swept = scanner.full_market_sweep()
 
     assert hits == {"RUNR"}
@@ -237,7 +237,7 @@ def test_full_market_sweep_ignores_yesterdays_bar_during_the_open_window(monkeyp
 
     broker = MagicMock()
     broker.daily_bars.return_value = SimpleNamespace(data={"GHOST": history + [stale_bar]})
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         hits, swept = scanner.full_market_sweep()
 
     assert hits == set()  # yesterday's +20% runner must NOT surface as a live mover
@@ -251,7 +251,7 @@ def test_full_market_sweep_survives_a_failed_chunk(monkeypatch):
 
     broker = MagicMock()
     broker.daily_bars.side_effect = Exception("one chunk timed out")
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         hits, swept = scanner.full_market_sweep()
 
     assert hits == set()
@@ -282,7 +282,7 @@ def test_realtime_gap_candidates_finds_a_live_gapper_with_no_lag(monkeypatch):
     }
     broker.daily_bars.side_effect = Exception("bars unavailable this cycle")  # lane still works
 
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         candidates = scanner.realtime_gap_candidates()
 
     assert [c.symbol for c in candidates] == ["GAPR"]
@@ -300,7 +300,7 @@ def test_realtime_gap_candidates_is_empty_when_snapshots_fail(monkeypatch):
     broker = MagicMock()
     broker.snapshots.side_effect = Exception("snapshot endpoint down")
 
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         assert scanner.realtime_gap_candidates() == []
 
 
@@ -312,7 +312,7 @@ def test_tradable_symbols_are_cached_for_the_day(monkeypatch):
     broker.all_tradable_symbols.return_value = ["AAAA", "BBBB"]
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         assert scanner._tradable_symbols() == ["AAAA", "BBBB"]
         assert scanner._tradable_symbols() == ["AAAA", "BBBB"]  # served from the day cache
 
@@ -333,7 +333,7 @@ def test_tradable_symbols_fall_back_to_the_stale_cache_on_failure(monkeypatch):
     broker.all_tradable_symbols.side_effect = Exception("asset endpoint down")
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         assert scanner._tradable_symbols() == ["STALE"]  # stale beats nothing mid-day
 
 
@@ -345,7 +345,7 @@ def test_live_float_lookup_is_skipped_for_a_symbol_failing_the_cheap_pillars(mon
     monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lookup)
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
+    with patch.object(scanner, "_broker", return_value=_mock_broker(bars)):
         scanner.scan(["COLD"])
 
     lookup.assert_not_called()
@@ -360,7 +360,7 @@ def test_live_float_lookup_runs_for_a_symbol_clearing_the_cheap_pillars(monkeypa
     monkeypatch.setattr("app.services.scanner.float_lookup.float_shares", lookup)
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=_mock_broker(bars)):
+    with patch.object(scanner, "_broker", return_value=_mock_broker(bars)):
         response = scanner.scan(["HOTT"])
 
     lookup.assert_called_once_with("HOTT")
@@ -384,7 +384,7 @@ def test_scan_classifies_a_dilution_risk_headline(monkeypatch):
     ]})
 
     scanner = MarketScanner()
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         response = scanner.scan(["GRML"])
 
     result = response.results[0]
@@ -416,7 +416,7 @@ def test_realtime_gap_candidates_classifies_news_too(monkeypatch):
         )
     ]})
 
-    with patch("app.services.scanner.AlpacaBroker", return_value=broker):
+    with patch.object(scanner, "_broker", return_value=broker):
         candidates = scanner.realtime_gap_candidates()
 
     assert len(candidates) == 1
@@ -454,3 +454,14 @@ def test_universe_age_days_is_none_when_the_file_is_missing(tmp_path):
     scanner.universe_path = tmp_path / "does_not_exist.txt"
 
     assert scanner.universe_age_days() is None
+
+
+def test_scanner_builds_its_broker_from_its_own_user_id(monkeypatch):
+    from app.brokers.alpaca_broker import AlpacaBroker
+
+    seen_user_ids = []
+    monkeypatch.setattr(AlpacaBroker, "for_user", classmethod(lambda cls, user_id: seen_user_ids.append(user_id) or MagicMock()))
+
+    MarketScanner(user_id=7)._broker()
+
+    assert seen_user_ids == [7]

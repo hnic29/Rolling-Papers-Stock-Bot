@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
 from app.config import settings
 from app.models import BotStatus, Signal, TradeRequest
-from app.services import bankroll, bot_state, notify, trade_log
+from app.services import bankroll, bot_state, credentials, notify, trade_log
 from app.services.catalyst import SENTIMENT_NEGATIVE
 from app.services.live_setup import build_pullback_setup
 from app.services.risk import RiskManager
@@ -48,15 +48,17 @@ def _parse_clock(value: str) -> dtime:
 
 
 class TradingBot:
-    def __init__(self) -> None:
+    def __init__(self, user_id: int = 1) -> None:
+        self.user_id = user_id
+        user_settings = credentials.get_credentials(user_id)
         self.status = BotStatus(
             running=False,
             symbol=settings.bot_symbol.upper(),
-            paper=settings.alpaca_paper,
+            paper=user_settings["alpaca_paper"],
         )
         self.strategy = SmallAccountPullbackStrategy()
         self.risk = RiskManager()
-        self.scanner = MarketScanner()
+        self.scanner = MarketScanner(user_id)
         # MarketScanner builds its own strategy instance too - shared here so
         # set_market_regime()'s float-ceiling adjustment (the only mutable state this
         # strategy carries) actually reaches the whole-market sweep, not just the gap
@@ -75,6 +77,15 @@ class TradingBot:
         self._last_known_market_open: bool | None = None
         self._restore_persisted_state()
 
+    def _user_settings(self) -> dict:
+        """Read fresh every time rather than cached at construction - a saved Settings
+        change takes effect on the very next cycle/request, the same way the old
+        global-settings code already worked (see refresh_status's Mode-field comment)."""
+        return credentials.get_credentials(self.user_id)
+
+    def _broker(self) -> AlpacaBroker:
+        return AlpacaBroker.for_user(self.user_id)
+
     def _restore_persisted_state(self) -> None:
         """Every deploy restarts this process, which used to silently drop
         auto_trading_enabled back to off (and the day's risk counters back to zero) with
@@ -84,7 +95,7 @@ class TradingBot:
         it correctly on the very next call, the same way it already handles a rollover
         that happens mid-session."""
         try:
-            saved = bot_state.load()
+            saved = bot_state.load(self.user_id)
         except Exception:
             saved = None
         if not saved:
@@ -113,6 +124,7 @@ class TradingBot:
                 walked_away_for_day=self.status.walked_away_for_day,
                 walk_away_reason=self.status.walk_away_reason,
                 auto_trading_started_at=self._auto_trading_started_at.isoformat() if self._auto_trading_started_at else None,
+                user_id=self.user_id,
             )
         except Exception:
             pass  # persistence is a nice-to-have across restarts, never worth crashing a live cycle over
@@ -122,7 +134,7 @@ class TradingBot:
         # on the next request - no restart) and this was only set at construction, so
         # the dashboard's Mode field kept saying "Paper" after switching to live: the
         # one field that must never lie about which world the money is in.
-        self.status.paper = settings.alpaca_paper
+        self.status.paper = self._user_settings()["alpaca_paper"]
 
         today = current_trading_day()
         if today != self._trading_day:
@@ -142,7 +154,7 @@ class TradingBot:
             # the bankroll) needs to compare against P&L from the same bankroll-scoped
             # world, not something that can swing on unrelated account activity. Also
             # means this keeps working even when Alpaca itself is unreachable.
-            realized = trade_log.todays_realized_trades(self._trading_day)
+            realized = trade_log.todays_realized_trades(self._trading_day, self.user_id)
             self.status.daily_pnl = round(sum((trade["realized_pnl"] or 0.0) for trade in realized), 2)
         except Exception:
             pass  # keep the last known value if the trade log isn't reachable for some reason
@@ -197,7 +209,7 @@ class TradingBot:
         """Max shares affordable within what's currently available to trade
         in the bankroll ledger (app.services.bankroll) — a hard cap
         independent of, and in addition to, the risk/capital caps above."""
-        available = bankroll.available_to_trade()
+        available = bankroll.available_to_trade(self.user_id)
         return int(available // price) if available > 0 and price > 0 else 0
 
     def _validate_against_bankroll(self, trade: TradeRequest) -> None:
@@ -205,7 +217,7 @@ class TradingBot:
         the whole point of the bankroll is that nothing opens a new position
         beyond what was actually "withdrawn," regardless of how the order
         was submitted."""
-        available = bankroll.available_to_trade()
+        available = bankroll.available_to_trade(self.user_id)
         if available <= 0:
             raise ValueError("No bankroll available. Withdraw funds on the Bankroll panel before placing a trade.")
         if trade.estimated_price is not None:
@@ -234,11 +246,13 @@ class TradingBot:
         if self.status.walked_away_for_day:
             return  # already persisted whenever it was first set - nothing changed here
 
+        user_settings = self._user_settings()
+
         # try/finally rather than a persist call before each return below - guarantees
         # whatever this method decided gets saved no matter which branch exits it,
         # instead of depending on every future edit remembering to add one too.
         try:
-            realized = trade_log.todays_realized_trades(self._trading_day)
+            realized = trade_log.todays_realized_trades(self._trading_day, self.user_id)
             running_pnl = 0.0
             peak = 0.0
             streak = 0
@@ -251,17 +265,17 @@ class TradingBot:
             self.status.peak_daily_pnl = round(peak, 2)
             self.status.consecutive_losses = streak
 
-            if streak >= settings.max_consecutive_losses:
+            if streak >= user_settings["max_consecutive_losses"]:
                 self.status.walked_away_for_day = True
                 self.status.walk_away_reason = f"{streak} losing trades in a row"
                 return
 
-            if peak > 0 and running_pnl <= peak * (1 - settings.max_daily_giveback_pct / 100):
+            if peak > 0 and running_pnl <= peak * (1 - user_settings["max_daily_giveback_pct"] / 100):
                 self.status.walked_away_for_day = True
-                self.status.walk_away_reason = f"gave back more than {settings.max_daily_giveback_pct:.0f}% of today's peak profit"
+                self.status.walk_away_reason = f"gave back more than {user_settings['max_daily_giveback_pct']:.0f}% of today's peak profit"
                 return
 
-            submitted = trade_log.todays_submitted_trades(self._trading_day)
+            submitted = trade_log.todays_submitted_trades(self._trading_day, self.user_id)
             if submitted:
                 baseline = datetime.fromisoformat(submitted[-1]["submitted_at"])
                 if baseline.tzinfo is None:
@@ -277,15 +291,16 @@ class TradingBot:
                 # 2026-08-25: the bot's first whole-market morning, silenced at 9:30:00.
                 baseline = max(baseline, _todays_session_open_utc())
                 idle_minutes = (datetime.now(UTC) - baseline).total_seconds() / 60
-                if idle_minutes > settings.max_minutes_without_trade:
+                if idle_minutes > user_settings["max_minutes_without_trade"]:
                     self.status.walked_away_for_day = True
-                    self.status.walk_away_reason = f"no trade taken in over {settings.max_minutes_without_trade} minutes — momentum has cooled"
+                    self.status.walk_away_reason = f"no trade taken in over {user_settings['max_minutes_without_trade']} minutes — momentum has cooled"
         finally:
             self._persist_state()
             # Only reachable on the cycle that TRIPPED a walk-away (already-tripped days
             # take the early return above), so this fires exactly once per trip.
             if self.status.walked_away_for_day:
                 notify.send(
+                    user_settings["ntfy_topic"],
                     "Walked away for the day",
                     f"Auto-trading paused for new entries — {self.status.walk_away_reason}. "
                     "Open positions stay protected; entries resume next trading day.",
@@ -335,7 +350,7 @@ class TradingBot:
                     exited.append(symbol)
                     continue
 
-                entry_rows = trade_log.open_filled_buys(symbol)
+                entry_rows = trade_log.open_filled_buys(symbol, user_id=self.user_id)
                 entry_row = entry_rows[-1] if entry_rows else None
                 if not entry_row or not entry_row.get("stop_loss_price") or not entry_row.get("filled_avg_price") or not current_price:
                     continue
@@ -361,11 +376,12 @@ class TradingBot:
                         # all, so a position that hits 2R before 9:30 simply stays on
                         # layer 1 (exit indicators) until the open can arm this.
                         self._cancel_open_orders(symbol)
-                        broker = AlpacaBroker()
+                        broker = self._broker()
                         stop_order = broker.submit_stop_order(symbol, qty, entry)
                         trade_log.record_pending_exit(entry_row["order_id"], str(stop_order.id), "stop")
                         self._protected_positions.add(symbol)
                         notify.send(
+                            self._user_settings()["ntfy_topic"],
                             f"{symbol} hit 2R — protected",
                             f"{symbol} reached twice its risk; stop moved to breakeven (${entry:,.2f}). Worst case is now a scratch.",
                             tags="shield",
@@ -385,11 +401,11 @@ class TradingBot:
         reason. Assumes any OTHER open order on the symbol already IS that protection
         (true for this bot's own order patterns: a position only ever has its own
         resting stop, or nothing) - skip rather than risk a duplicate."""
-        entry_rows = trade_log.open_filled_buys(symbol)
+        entry_rows = trade_log.open_filled_buys(symbol, user_id=self.user_id)
         entry_row = entry_rows[-1] if entry_rows else None
         if not entry_row or not entry_row.get("stop_loss_price"):
             return
-        broker = AlpacaBroker()
+        broker = self._broker()
         try:
             if broker.open_orders(symbol):
                 return
@@ -399,6 +415,7 @@ class TradingBot:
         stop_order = broker.submit_stop_order(symbol, qty, stop_price)
         trade_log.record_pending_exit(entry_row["order_id"], str(stop_order.id), "stop")
         notify.send(
+            self._user_settings()["ntfy_topic"],
             f"{symbol} stop armed",
             f"Regular hours opened — resting stop placed at ${stop_price:,.2f} for the position "
             "opened premarket, which had no broker-side protection until now.",
@@ -421,7 +438,7 @@ class TradingBot:
         self.submit_trade(trade, exit_reason=exit_reason)
 
     def _cancel_open_orders(self, symbol: str) -> None:
-        broker = AlpacaBroker()
+        broker = self._broker()
         for order in broker.open_orders(symbol):
             try:
                 broker.cancel_order(str(order.id))
@@ -487,9 +504,10 @@ class TradingBot:
             return self.status
 
         self.status.last_automation_run_at = datetime.now(UTC).isoformat()
+        user_settings = self._user_settings()
 
         try:
-            broker = AlpacaBroker()
+            broker = self._broker()
             clock = broker.client.get_clock()
         except BrokerUnavailable as exc:
             self.status.last_message = str(exc)
@@ -501,7 +519,7 @@ class TradingBot:
         regular_hours = clock.is_open
         # Ross's real trading window opens well before 9:30 - see PREMARKET_LIMIT_BUFFER_PCT's
         # comment for why this is opt-out, not opt-in.
-        premarket = (not regular_hours) and settings.premarket_trading_enabled and self._in_premarket_window(datetime.now(UTC))
+        premarket = (not regular_hours) and user_settings["premarket_trading_enabled"] and self._in_premarket_window(datetime.now(UTC))
         if not regular_hours and not premarket:
             self.status.last_message = "Auto-trading idle — market is closed"
             return self.status
@@ -517,7 +535,7 @@ class TradingBot:
         # top of the one already resting. See trade_log.pending_buy_symbols for the
         # live incident this fixes.
         try:
-            held_symbols |= trade_log.pending_buy_symbols()
+            held_symbols |= trade_log.pending_buy_symbols(self.user_id)
         except Exception:
             pass  # a lookup failure here should never block managing what we DO know about
 
@@ -535,7 +553,7 @@ class TradingBot:
             )
             return self.status
 
-        if bankroll.available_to_trade() <= 0:
+        if bankroll.available_to_trade(self.user_id) <= 0:
             self.status.last_message = (
                 "Auto-trading idle — no bankroll available. Withdraw funds on the Bankroll panel to start trading."
             )
@@ -582,7 +600,7 @@ class TradingBot:
         traded: list[str] = []
         skipped: list[str] = []
         for symbol, live_candidate in entry_queue:
-            if self.status.trades_today >= settings.max_trades_per_day:
+            if self.status.trades_today >= user_settings["max_trades_per_day"]:
                 break
             try:
                 setup = build_pullback_setup(symbol, self.scanner, candidate=live_candidate)
@@ -620,9 +638,9 @@ class TradingBot:
 
             # Percentages of the current bankroll, not fixed dollars - see app.config's
             # comment on risk_per_trade_pct for why.
-            current_bankroll = bankroll.current_bankroll()
-            risk_dollars = current_bankroll * settings.risk_per_trade_pct / 100
-            position_value_dollars = current_bankroll * settings.max_position_value_pct / 100
+            current_bankroll = bankroll.current_bankroll(self.user_id)
+            risk_dollars = current_bankroll * user_settings["risk_per_trade_pct"] / 100
+            position_value_dollars = current_bankroll * user_settings["max_position_value_pct"] / 100
 
             risk_per_share = entry_price - setup.proposed_stop
             qty_by_risk = int(risk_dollars // risk_per_share) if risk_per_share > 0 else 0
@@ -651,6 +669,7 @@ class TradingBot:
                 traded.append(symbol)
                 if setup.candidate.news_sentiment == SENTIMENT_NEGATIVE:
                     notify.send(
+                        user_settings["ntfy_topic"],
                         f"{symbol}: dilution-risk catalyst, sized down",
                         f"{symbol}'s catalyst ({setup.candidate.news_headline or 'see scanner'}) carries dilution "
                         f"risk - position sized to {int(DILUTION_RISK_SIZE_MULTIPLIER * 100)}% of normal.",
@@ -693,7 +712,7 @@ class TradingBot:
         loop every cycle regardless of auto-trading being on or the market currently
         being open, so it fires reliably even while idle."""
         try:
-            broker = AlpacaBroker()
+            broker = self._broker()
             is_open = broker.client.get_clock().is_open
         except Exception:
             return  # a clock hiccup shouldn't spam notifications either way
@@ -703,18 +722,21 @@ class TradingBot:
         if previous is None or previous == is_open:
             return  # first check after startup just primes state; no change, no notification
 
+        topic = self._user_settings()["ntfy_topic"]
         if is_open:
             notify.send(
+                topic,
                 "Market is open",
                 f"Regular trading hours have started (9:30 AM ET). Auto-trading is "
                 f"{'on' if self.status.auto_trading_enabled else 'off'}.",
                 tags="bell",
             )
         else:
-            realized_today = trade_log.todays_realized_trades(self._trading_day)
+            realized_today = trade_log.todays_realized_trades(self._trading_day, self.user_id)
             pnl = sum(t["realized_pnl"] or 0.0 for t in realized_today)
             sign = "+" if pnl >= 0 else "-"
             notify.send(
+                topic,
                 "Market is closed",
                 f"Regular trading hours have ended (4:00 PM ET). Today: {len(realized_today)} trade(s) "
                 f"closed, {sign}${abs(pnl):,.2f} realized.",
@@ -735,7 +757,7 @@ class TradingBot:
         2026-08-25 spiked +213% then fully round-tripped red, entirely premarket."""
         self.refresh_status()
         try:
-            broker = AlpacaBroker()
+            broker = self._broker()
             clock = broker.client.get_clock()
         except BrokerUnavailable:
             return self.status
@@ -743,7 +765,9 @@ class TradingBot:
             return self.status
 
         regular_hours = clock.is_open
-        premarket = (not regular_hours) and settings.premarket_trading_enabled and self._in_premarket_window(datetime.now(UTC))
+        premarket = (
+            (not regular_hours) and self._user_settings()["premarket_trading_enabled"] and self._in_premarket_window(datetime.now(UTC))
+        )
         if not regular_hours and not premarket:
             return self.status
 
@@ -759,11 +783,12 @@ class TradingBot:
 
     def submit_trade(self, trade: TradeRequest, exit_reason: str = "manual_close") -> dict:
         self.refresh_status()
-        self.risk.validate(trade, self.status.trades_today, self.status.daily_pnl)
+        user_settings = self._user_settings()
+        self.risk.validate(trade, self.status.trades_today, self.status.daily_pnl, user_settings, self.user_id)
         if trade.side == Signal.buy:
             self._validate_against_bankroll(trade)
         try:
-            broker = AlpacaBroker()
+            broker = self._broker()
             if trade.extended_hours:
                 if not trade.estimated_price:
                     raise ValueError("Extended-hours orders require a limit price")
@@ -794,6 +819,7 @@ class TradingBot:
             stop_loss_price=trade.stop_loss_price,
             take_profit_price=trade.take_profit_price,
             entry_price_estimate=trade.estimated_price if trade.side == Signal.buy else None,
+            user_id=self.user_id,
         )
 
         # EVERY sell that closes a long links back to the open buy row(s) it closes -
@@ -804,7 +830,7 @@ class TradingBot:
         # which left manual closes (dashboard sell / API) with exactly that bug.
         # trade_sync completes the exit (price, P&L) once the sell actually fills.
         if trade.side == Signal.sell:
-            for buy in trade_log.open_filled_buys(trade.symbol):
+            for buy in trade_log.open_filled_buys(trade.symbol, user_id=self.user_id):
                 trade_log.record_pending_exit(buy["order_id"], str(order.id), exit_reason)
 
         # Buys only - sells get their notification when the exit CONFIRMS with real
@@ -814,6 +840,7 @@ class TradingBot:
             entry = f" @ ~${trade.estimated_price:,.2f}" if trade.estimated_price is not None else ""
             stop = f", stop ${trade.stop_loss_price:,.2f}" if trade.stop_loss_price is not None else ", no stop attached"
             notify.send(
+                user_settings["ntfy_topic"],
                 f"Opened {trade.symbol.upper()}",
                 f"Bought {trade.qty:g} {trade.symbol.upper()}{entry}{stop}",
                 tags="chart_with_upwards_trend",

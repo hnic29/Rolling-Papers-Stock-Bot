@@ -77,7 +77,7 @@ def test_sync_notifies_with_realized_pnl_when_an_exit_confirms(monkeypatch):
     trade_log.record_pending_exit("buy-1", "sell-1", "exit_signal")
 
     sent = []
-    monkeypatch.setattr("app.services.trade_sync.notify.send", lambda title, message, **kw: sent.append((title, message)))
+    monkeypatch.setattr("app.services.trade_sync.notify.send", lambda topic, title, message, **kw: sent.append((title, message)))
 
     broker = MagicMock()
     broker.get_order.return_value = _order(status="filled", filled_avg_price=5.5, filled_qty=10, order_id="sell-1")

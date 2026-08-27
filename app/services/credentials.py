@@ -4,8 +4,10 @@ with a server-side master key (Fernet, symmetric) that lives only in the
 container's environment, generated and persisted on first use the same lazy way
 session_auth.py handles its signing secret - never in the database, never in git.
 
-Not yet wired into TradingBot/MarketScanner (that's the per-user bot registry,
-still to come) - this module is the storage layer those will read from."""
+Now the storage layer TradingBot/MarketScanner read from (app.services.bot_registry)
+for everything except the deployment-wide tuning knobs (trading windows, scan
+limits, ...) that stay shared across every user of one deployment - see the field
+list below for exactly what's per-user vs. what isn't."""
 
 import sqlite3
 
@@ -25,6 +27,11 @@ _DEFAULTS = {
     "max_daily_loss_pct": 6.0,
     "max_trades_per_day": 5,
     "premarket_trading_enabled": True,
+    # Walk-away rules (TradingBot._update_session_state) - per-user so one person's
+    # losing streak or giveback trip never pauses anyone else's trading.
+    "max_consecutive_losses": 3,
+    "max_daily_giveback_pct": 50.0,
+    "max_minutes_without_trade": 60,
 }
 
 
@@ -45,10 +52,24 @@ def _connect() -> sqlite3.Connection:
             max_daily_loss_pct REAL NOT NULL DEFAULT 6.0,
             max_trades_per_day INTEGER NOT NULL DEFAULT 5,
             premarket_trading_enabled INTEGER NOT NULL DEFAULT 1,
+            max_consecutive_losses INTEGER NOT NULL DEFAULT 3,
+            max_daily_giveback_pct REAL NOT NULL DEFAULT 50.0,
+            max_minutes_without_trade INTEGER NOT NULL DEFAULT 60,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
         """
     )
+    # Lightweight migration for a table created before the walk-away-rule columns
+    # existed - CREATE TABLE IF NOT EXISTS is a no-op against an already-existing table.
+    for column, default in (
+        ("max_consecutive_losses", "3"),
+        ("max_daily_giveback_pct", "50.0"),
+        ("max_minutes_without_trade", "60"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE user_credentials ADD COLUMN {column} NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     return conn
 
 
@@ -107,6 +128,9 @@ def get_credentials(user_id: int) -> dict:
         "max_daily_loss_pct": data["max_daily_loss_pct"],
         "max_trades_per_day": data["max_trades_per_day"],
         "premarket_trading_enabled": bool(data["premarket_trading_enabled"]),
+        "max_consecutive_losses": data["max_consecutive_losses"],
+        "max_daily_giveback_pct": data["max_daily_giveback_pct"],
+        "max_minutes_without_trade": data["max_minutes_without_trade"],
     }
 
 
@@ -128,8 +152,9 @@ def save_credentials(user_id: int, **fields) -> dict:
             INSERT INTO user_credentials (
                 user_id, alpaca_api_key_encrypted, alpaca_secret_key_encrypted, alpaca_paper,
                 allow_live_trading, fmp_api_key_encrypted, ntfy_topic, risk_per_trade_pct,
-                max_position_value_pct, max_daily_loss_pct, max_trades_per_day, premarket_trading_enabled
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_position_value_pct, max_daily_loss_pct, max_trades_per_day, premarket_trading_enabled,
+                max_consecutive_losses, max_daily_giveback_pct, max_minutes_without_trade
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 alpaca_api_key_encrypted = excluded.alpaca_api_key_encrypted,
                 alpaca_secret_key_encrypted = excluded.alpaca_secret_key_encrypted,
@@ -141,7 +166,10 @@ def save_credentials(user_id: int, **fields) -> dict:
                 max_position_value_pct = excluded.max_position_value_pct,
                 max_daily_loss_pct = excluded.max_daily_loss_pct,
                 max_trades_per_day = excluded.max_trades_per_day,
-                premarket_trading_enabled = excluded.premarket_trading_enabled
+                premarket_trading_enabled = excluded.premarket_trading_enabled,
+                max_consecutive_losses = excluded.max_consecutive_losses,
+                max_daily_giveback_pct = excluded.max_daily_giveback_pct,
+                max_minutes_without_trade = excluded.max_minutes_without_trade
             """,
             (
                 user_id,
@@ -156,6 +184,9 @@ def save_credentials(user_id: int, **fields) -> dict:
                 current["max_daily_loss_pct"],
                 current["max_trades_per_day"],
                 int(current["premarket_trading_enabled"]),
+                current["max_consecutive_losses"],
+                current["max_daily_giveback_pct"],
+                current["max_minutes_without_trade"],
             ),
         )
     conn.close()
@@ -165,3 +196,37 @@ def save_credentials(user_id: int, **fields) -> dict:
 def has_credentials(user_id: int) -> bool:
     creds = get_credentials(user_id)
     return bool(creds["alpaca_api_key"] and creds["alpaca_secret_key"])
+
+
+def migrate_legacy_settings(user_id: int) -> None:
+    """One-time upgrade path: before per-user credentials existed, every setting
+    below lived in the single global .env-backed Settings object. Copies that
+    deployment's current values into this user's row so the bot's behavior doesn't
+    change the moment it switches from reading global settings to reading
+    user_credentials. A no-op once this user already has a row - never overwrites
+    a value someone has since changed through their own Settings page."""
+    conn = _connect()
+    row = conn.execute("SELECT 1 FROM user_credentials WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    if row is not None:
+        return
+
+    from app.config import settings
+
+    save_credentials(
+        user_id,
+        alpaca_api_key=settings.alpaca_api_key,
+        alpaca_secret_key=settings.alpaca_secret_key,
+        alpaca_paper=settings.alpaca_paper,
+        allow_live_trading=settings.allow_live_trading,
+        fmp_api_key=settings.fmp_api_key,
+        ntfy_topic=settings.ntfy_topic,
+        risk_per_trade_pct=settings.risk_per_trade_pct,
+        max_position_value_pct=settings.max_position_value_pct,
+        max_daily_loss_pct=settings.max_daily_loss_pct,
+        max_trades_per_day=settings.max_trades_per_day,
+        premarket_trading_enabled=settings.premarket_trading_enabled,
+        max_consecutive_losses=settings.max_consecutive_losses,
+        max_daily_giveback_pct=settings.max_daily_giveback_pct,
+        max_minutes_without_trade=settings.max_minutes_without_trade,
+    )

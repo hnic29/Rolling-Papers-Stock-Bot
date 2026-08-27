@@ -59,6 +59,15 @@ def verify_session_token(token: str) -> int | None:
     return data.get("user_id")
 
 
+def resolve_optional_user_id(request: Request) -> int | None:
+    """For routes that must stay reachable with no session at all (health checks) but
+    still want to personalize their response when a valid one happens to be present -
+    /api/status is the one case: a monitoring probe hits it with no cookie, but the
+    logged-in dashboard hits the exact same path and needs its own bot's status."""
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    return verify_session_token(token) if token else None
+
+
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path

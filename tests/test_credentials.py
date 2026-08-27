@@ -78,3 +78,36 @@ def test_a_value_encrypted_under_a_rotated_key_decrypts_to_empty_rather_than_rai
 
     creds = credentials.get_credentials(user_id=1)
     assert creds["alpaca_api_key"] == ""
+
+
+def test_walk_away_rule_defaults_match_the_current_global_defaults():
+    creds = credentials.get_credentials(user_id=1)
+
+    assert creds["max_consecutive_losses"] == 3
+    assert creds["max_daily_giveback_pct"] == 50.0
+    assert creds["max_minutes_without_trade"] == 60
+
+
+def test_migrate_legacy_settings_copies_the_current_global_settings_in(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "alpaca_api_key", "legacy-key")
+    monkeypatch.setattr(settings, "alpaca_secret_key", "legacy-secret")
+    monkeypatch.setattr(settings, "risk_per_trade_pct", 3.5)
+    monkeypatch.setattr(settings, "max_consecutive_losses", 5)
+
+    credentials.migrate_legacy_settings(user_id=1)
+
+    creds = credentials.get_credentials(1)
+    assert creds["alpaca_api_key"] == "legacy-key"
+    assert creds["alpaca_secret_key"] == "legacy-secret"
+    assert creds["risk_per_trade_pct"] == 3.5
+    assert creds["max_consecutive_losses"] == 5
+
+
+def test_migrate_legacy_settings_never_overwrites_an_existing_row():
+    credentials.save_credentials(user_id=1, alpaca_api_key="already-set-by-the-user")
+
+    credentials.migrate_legacy_settings(user_id=1)
+
+    assert credentials.get_credentials(1)["alpaca_api_key"] == "already-set-by-the-user"

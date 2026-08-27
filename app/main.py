@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.brokers.alpaca_broker import AlpacaBroker, BrokerUnavailable
-from app.config import reload_settings, settings
+from app.config import settings
 from app.models import (
     AppSettingsResponse,
     AppSettingsUpdate,
@@ -29,10 +29,9 @@ from app.models import (
     UserPublic,
 )
 from app.paths import resource_path
-from app.services import bankroll, notify, trade_log, trade_sync, users
+from app.services import bankroll, bot_registry, credentials, notify, trade_log, trade_sync, users
 from app.services.backtest import run_daily_backtest
-from app.services.bot import bot
-from app.services.env_file import InvalidEnvValue, mask_secret, read_env, write_env
+from app.services.env_file import mask_secret
 from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 from app.services.session_auth import (
@@ -40,40 +39,49 @@ from app.services.session_auth import (
     SESSION_MAX_AGE_SECONDS,
     SessionAuthMiddleware,
     create_session_token,
+    resolve_optional_user_id,
 )
 
 
-def _sync_orders_headless() -> None:
-    """Server-side fill/exit reconciliation - the dashboard's own periodic sync only
-    happens while a browser has the page open, and the bankroll gate plus walk-away
-    rules read directly from what this records. Skipping when the broker isn't
-    configured (or a sync hiccups) is fine; the next cycle retries."""
+def _sync_orders_headless(user_id: int, ntfy_topic: str) -> None:
+    """Server-side fill/exit reconciliation for one user - the dashboard's own
+    periodic sync only happens while a browser has the page open, and the bankroll
+    gate plus walk-away rules read directly from what this records. Skipping when the
+    broker isn't configured (or a sync hiccups) is fine; the next cycle retries."""
     try:
-        trade_sync.sync_orders(AlpacaBroker())
+        trade_sync.sync_orders(AlpacaBroker.for_user(user_id), user_id=user_id, ntfy_topic=ntfy_topic)
     except Exception:
         pass
 
 
 async def _automation_loop() -> None:
-    """Runs for the life of the server. Order syncing and manage_open_positions()
-    always run - fills/exits must reconcile and open positions stay protected whether
-    or not new-entry auto-trading is switched on - while auto_cycle() (new entries) is
-    a no-op unless auto-trading is enabled."""
+    """Runs for the life of the server, once per registered user each cycle
+    (sequentially - simpler than one task per user, and naturally throttles how many
+    Alpaca API calls fire at once for a handful of family/friends). Order syncing and
+    manage_open_positions() always run for every user - fills/exits must reconcile and
+    open positions stay protected whether or not new-entry auto-trading is switched on
+    - while auto_cycle() (new entries) is a no-op unless that user has it enabled. One
+    user's cycle failing never blocks another's - each gets its own try/except."""
     while True:
-        try:
-            await asyncio.to_thread(_sync_orders_headless)
-            await asyncio.to_thread(bot.check_market_open_close_notifications)
-            await asyncio.to_thread(bot.manage_open_positions)
-            if bot.status.auto_trading_enabled:
-                await asyncio.to_thread(bot.auto_cycle)
-        except Exception:
-            pass  # a single bad cycle should never kill the loop
+        for user in users.list_users():
+            user_id = user["id"]
+            try:
+                user_settings = credentials.get_credentials(user_id)
+                bot = bot_registry.get_bot(user_id)
+                await asyncio.to_thread(_sync_orders_headless, user_id, user_settings["ntfy_topic"])
+                await asyncio.to_thread(bot.check_market_open_close_notifications)
+                await asyncio.to_thread(bot.manage_open_positions)
+                if bot.status.auto_trading_enabled:
+                    await asyncio.to_thread(bot.auto_cycle)
+            except Exception:
+                pass  # a single bad cycle for one user should never kill the loop or block anyone else
         await asyncio.sleep(settings.automation_interval_seconds)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     users.migrate_legacy_dashboard_credentials()
+    credentials.migrate_legacy_settings(1)
     task = asyncio.create_task(_automation_loop())
     yield
     task.cancel()
@@ -82,7 +90,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Rolling Papers Bot", version="0.1.0", lifespan=lifespan)
 app.add_middleware(SessionAuthMiddleware)
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
-scanner = MarketScanner()
 MAX_BARS_LIMIT = 5000
 
 # Longer-range chart presets: (bar timeframe, lookback in calendar days). YTD is handled separately.
@@ -143,28 +150,35 @@ def index():
     return HTMLResponse(_INDEX_HTML)
 
 
-@app.get("/api/status", response_model=BotStatus)
-def status():
-    return bot.refresh_status()
+@app.get("/api/status")
+def status(request: Request):
+    """Left public (see SessionAuthMiddleware's _PUBLIC_PATHS) so an external monitor
+    can ping this with no session at all - it just gets a bare "ok" then. The logged-in
+    dashboard hits this exact same path with its session cookie already attached and
+    gets its own bot's real status back."""
+    user_id = resolve_optional_user_id(request)
+    if user_id is None:
+        return {"status": "ok"}
+    return bot_registry.get_bot(user_id).refresh_status()
 
 
 @app.get("/api/settings", response_model=AppSettingsResponse)
-def get_settings():
-    values = read_env()
+def get_settings(request: Request):
+    creds = credentials.get_credentials(request.state.user_id)
     return AppSettingsResponse(
-        alpaca_api_key=mask_secret(values.get("ALPACA_API_KEY", "")),
-        alpaca_secret_key=mask_secret(values.get("ALPACA_SECRET_KEY", "")),
-        alpaca_paper=values.get("ALPACA_PAPER", "true").lower() == "true",
-        fmp_api_key=mask_secret(values.get("FMP_API_KEY", "")),
-        allow_live_trading=values.get("ALLOW_LIVE_TRADING", "false").lower() == "true",
-        ntfy_topic=values.get("NTFY_TOPIC", ""),
+        alpaca_api_key=mask_secret(creds["alpaca_api_key"]),
+        alpaca_secret_key=mask_secret(creds["alpaca_secret_key"]),
+        alpaca_paper=creds["alpaca_paper"],
+        fmp_api_key=mask_secret(creds["fmp_api_key"]),
+        allow_live_trading=creds["allow_live_trading"],
+        ntfy_topic=creds["ntfy_topic"],
     )
 
 
 @app.post("/api/settings", response_model=AppSettingsResponse)
-def save_settings(request: AppSettingsUpdate):
-    arming_live = not request.alpaca_paper and request.allow_live_trading
-    if arming_live and not request.confirm_live_trading:
+def save_settings(body: AppSettingsUpdate, request: Request):
+    arming_live = not body.alpaca_paper and body.allow_live_trading
+    if arming_live and not body.confirm_live_trading:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -173,35 +187,33 @@ def save_settings(request: AppSettingsUpdate):
             ),
         )
 
-    previous_topic = settings.ntfy_topic
+    user_id = request.state.user_id
+    previous_topic = credentials.get_credentials(user_id)["ntfy_topic"]
     updates = {
-        "ALPACA_PAPER": str(request.alpaca_paper).lower(),
-        "ALLOW_LIVE_TRADING": str(request.allow_live_trading).lower(),
-        "NTFY_TOPIC": request.ntfy_topic.strip(),
+        "alpaca_paper": body.alpaca_paper,
+        "allow_live_trading": body.allow_live_trading,
+        "ntfy_topic": body.ntfy_topic.strip(),
     }
-    if request.alpaca_api_key and "..." not in request.alpaca_api_key:
-        updates["ALPACA_API_KEY"] = _clean_api_key(request.alpaca_api_key)
-    if request.alpaca_secret_key and "..." not in request.alpaca_secret_key:
-        updates["ALPACA_SECRET_KEY"] = _clean_api_key(request.alpaca_secret_key)
-    if request.fmp_api_key and "..." not in request.fmp_api_key:
-        updates["FMP_API_KEY"] = _clean_api_key(request.fmp_api_key)
+    if body.alpaca_api_key and "..." not in body.alpaca_api_key:
+        updates["alpaca_api_key"] = _clean_api_key(body.alpaca_api_key)
+    if body.alpaca_secret_key and "..." not in body.alpaca_secret_key:
+        updates["alpaca_secret_key"] = _clean_api_key(body.alpaca_secret_key)
+    if body.fmp_api_key and "..." not in body.fmp_api_key:
+        updates["fmp_api_key"] = _clean_api_key(body.fmp_api_key)
 
-    try:
-        write_env(updates)
-    except InvalidEnvValue as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    reload_settings()
+    credentials.save_credentials(user_id, **updates)
 
     # Immediate feedback on the phone that the topic actually works - the alternative
     # is discovering a typo'd topic days later by missing a real trade alert.
-    if settings.ntfy_topic and settings.ntfy_topic != previous_topic:
+    if updates["ntfy_topic"] and updates["ntfy_topic"] != previous_topic:
         notify.send(
+            updates["ntfy_topic"],
             "Notifications connected",
             "Rolling Papers Bot will push trade opens, exits with P&L, and walk-aways here.",
             tags="white_check_mark",
         )
 
-    return get_settings()
+    return get_settings(request)
 
 
 def _set_session_cookie(response: Response, user_id: int) -> None:
@@ -267,12 +279,12 @@ def change_my_password(request: Request, body: ChangePasswordRequest):
     return {"message": "Password updated."}
 
 
-def _bankroll_status() -> BankrollStatus:
-    balance = bankroll.current_bankroll()
+def _bankroll_status(user_id: int) -> BankrollStatus:
+    balance = bankroll.current_bankroll(user_id)
     savings_balance = None
     savings_unavailable_reason = None
     try:
-        account_equity = float(AlpacaBroker().account().equity)
+        account_equity = float(AlpacaBroker.for_user(user_id).account().equity)
     except BrokerUnavailable as exc:
         savings_unavailable_reason = str(exc)
     except Exception as exc:
@@ -282,49 +294,51 @@ def _bankroll_status() -> BankrollStatus:
 
     return BankrollStatus(
         bankroll_balance=balance,
-        deployed_capital=bankroll.deployed_capital(),
-        available_to_trade=bankroll.available_to_trade(),
-        realized_pnl=round(bankroll.realized_pnl(), 2),
+        deployed_capital=bankroll.deployed_capital(user_id),
+        available_to_trade=bankroll.available_to_trade(user_id),
+        realized_pnl=round(bankroll.realized_pnl(user_id), 2),
         savings_balance=savings_balance,
         savings_unavailable_reason=savings_unavailable_reason,
-        transactions=bankroll.transactions(limit=20),
+        transactions=bankroll.transactions(limit=20, user_id=user_id),
     )
 
 
 @app.get("/api/bankroll", response_model=BankrollStatus)
-def get_bankroll():
-    return _bankroll_status()
+def get_bankroll(request: Request):
+    return _bankroll_status(request.state.user_id)
 
 
 @app.post("/api/bankroll/withdraw", response_model=BankrollStatus)
-def withdraw_bankroll(request: BankrollWithdrawRequest):
+def withdraw_bankroll(body: BankrollWithdrawRequest, request: Request):
+    user_id = request.state.user_id
     try:
-        account_equity = float(AlpacaBroker().account().equity)
+        account_equity = float(AlpacaBroker.for_user(user_id).account().equity)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca account: {exc}") from exc
 
     try:
-        bankroll.record_withdrawal(request.amount, account_equity, note=request.note)
+        bankroll.record_withdrawal(body.amount, account_equity, note=body.note, user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _bankroll_status()
+    return _bankroll_status(user_id)
 
 
 @app.post("/api/bankroll/return", response_model=BankrollStatus)
-def return_bankroll(request: BankrollReturnRequest):
+def return_bankroll(body: BankrollReturnRequest, request: Request):
+    user_id = request.state.user_id
     try:
-        bankroll.record_return_to_savings(request.amount, note=request.note)
+        bankroll.record_return_to_savings(body.amount, note=body.note, user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _bankroll_status()
+    return _bankroll_status(user_id)
 
 
 @app.get("/api/settings/test")
-def test_settings():
+def test_settings(request: Request):
     try:
-        account = AlpacaBroker().account()
+        account = AlpacaBroker.for_user(request.state.user_id).account()
     except BrokerUnavailable as exc:
         alpaca_result = {"configured": False, "ok": False, "detail": str(exc)}
     except Exception as exc:
@@ -347,47 +361,47 @@ def test_settings():
 
 
 @app.post("/api/start", response_model=BotStatus)
-def start():
-    return bot.start()
+def start(request: Request):
+    return bot_registry.get_bot(request.state.user_id).start()
 
 
 @app.post("/api/stop", response_model=BotStatus)
-def stop():
-    return bot.stop()
+def stop(request: Request):
+    return bot_registry.get_bot(request.state.user_id).stop()
 
 
 @app.post("/api/tick", response_model=BotStatus)
-def tick():
-    return bot.tick()
+def tick(request: Request):
+    return bot_registry.get_bot(request.state.user_id).tick()
 
 
 @app.post("/api/automation/start", response_model=BotStatus)
-def start_automation():
-    return bot.start_auto_trading()
+def start_automation(request: Request):
+    return bot_registry.get_bot(request.state.user_id).start_auto_trading()
 
 
 @app.post("/api/automation/stop", response_model=BotStatus)
-def stop_automation():
-    return bot.stop_auto_trading()
+def stop_automation(request: Request):
+    return bot_registry.get_bot(request.state.user_id).stop_auto_trading()
 
 
 @app.post("/api/automation/resume-day", response_model=BotStatus)
-def resume_day():
+def resume_day(request: Request):
     """Manual override: clears today's walk-away so auto-trading may take new entries
     again. Deliberately never automatic - see TradingBot.resume_day."""
-    return bot.resume_day()
+    return bot_registry.get_bot(request.state.user_id).resume_day()
 
 
 @app.post("/api/automation/trades-today", response_model=BotStatus)
-def correct_trades_today(count: int):
+def correct_trades_today(count: int, request: Request):
     """Manual bookkeeping correction - see TradingBot.correct_trades_today."""
-    return bot.correct_trades_today(count)
+    return bot_registry.get_bot(request.state.user_id).correct_trades_today(count)
 
 
 @app.post("/api/scanner")
-def scan_market(request: ScannerRequest):
+def scan_market(body: ScannerRequest, request: Request):
     try:
-        return scanner.scan(request.symbols)
+        return MarketScanner(request.state.user_id).scan(body.symbols)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -395,9 +409,9 @@ def scan_market(request: ScannerRequest):
 
 
 @app.post("/api/scanner/auto")
-def scan_market_universe(request: AutoScannerRequest):
+def scan_market_universe(body: AutoScannerRequest, request: Request):
     try:
-        return scanner.scan_universe(limit=request.limit, max_symbols=request.max_symbols)
+        return MarketScanner(request.state.user_id).scan_universe(limit=body.limit, max_symbols=body.max_symbols)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -405,9 +419,10 @@ def scan_market_universe(request: AutoScannerRequest):
 
 
 @app.get("/api/account")
-def account():
+def account(request: Request):
+    user_id = request.state.user_id
     try:
-        acct = AlpacaBroker().account()
+        acct = AlpacaBroker.for_user(user_id).account()
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -418,14 +433,14 @@ def account():
         "currency": acct.currency,
         "buying_power": acct.buying_power,
         "equity": acct.equity,
-        "paper": bot.status.paper,
+        "paper": bot_registry.get_bot(user_id).status.paper,
     }
 
 
 @app.get("/api/positions")
-def positions():
+def positions(request: Request):
     try:
-        return {"positions": AlpacaBroker().positions_as_dicts()}
+        return {"positions": AlpacaBroker.for_user(request.state.user_id).positions_as_dicts()}
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -433,9 +448,9 @@ def positions():
 
 
 @app.get("/api/portfolio/history")
-def portfolio_history(period: str = "1D", timeframe: str = "5Min"):
+def portfolio_history(request: Request, period: str = "1D", timeframe: str = "5Min"):
     try:
-        return AlpacaBroker().portfolio_history(period=period, timeframe=timeframe)
+        return AlpacaBroker.for_user(request.state.user_id).portfolio_history(period=period, timeframe=timeframe)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -443,25 +458,27 @@ def portfolio_history(period: str = "1D", timeframe: str = "5Min"):
 
 
 @app.get("/api/trades/history")
-def trade_history(limit: int = 50):
-    return {"trades": trade_log.list_trades(limit=min(max(limit, 1), 500))}
+def trade_history(request: Request, limit: int = 50):
+    return {"trades": trade_log.list_trades(limit=min(max(limit, 1), 500), user_id=request.state.user_id)}
 
 
 @app.post("/api/trades/history/sync")
-def sync_trade_history():
+def sync_trade_history(request: Request):
+    user_id = request.state.user_id
     try:
-        broker = AlpacaBroker()
+        broker = AlpacaBroker.for_user(user_id)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    trade_sync.sync_orders(broker)
-    return {"trades": trade_log.list_trades(limit=50)}
+    ntfy_topic = credentials.get_credentials(user_id)["ntfy_topic"]
+    trade_sync.sync_orders(broker, user_id=user_id, ntfy_topic=ntfy_topic)
+    return {"trades": trade_log.list_trades(limit=50, user_id=user_id)}
 
 
 @app.get("/api/quote/{symbol}")
-def quote(symbol: str):
+def quote(symbol: str, request: Request):
     try:
-        return AlpacaBroker().latest_quote(symbol)
+        return AlpacaBroker.for_user(request.state.user_id).latest_quote(symbol)
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -469,7 +486,14 @@ def quote(symbol: str):
 
 
 @app.get("/api/bars/{symbol}")
-def bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: int | None = None, period: str | None = None):
+def bars(
+    symbol: str,
+    request: Request,
+    limit: int = 120,
+    trading_date: date | None = None,
+    days: int | None = None,
+    period: str | None = None,
+):
     try:
         sort = Sort.ASC
         timeframe = TimeFrame.Minute
@@ -493,7 +517,9 @@ def bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: 
             start = end - timedelta(days=7)
         return {
             "symbol": symbol.upper(),
-            "bars": AlpacaBroker().historical_bars(symbol, start=start, end=end, limit=limit, sort=sort, timeframe=timeframe),
+            "bars": AlpacaBroker.for_user(request.state.user_id).historical_bars(
+                symbol, start=start, end=end, limit=limit, sort=sort, timeframe=timeframe
+            ),
         }
     except BrokerUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -504,21 +530,21 @@ def bars(symbol: str, limit: int = 120, trading_date: date | None = None, days: 
 
 
 @app.post("/api/trade")
-def trade(request: TradeRequest):
+def trade(body: TradeRequest, request: Request):
     try:
-        return bot.submit_trade(request)
+        return bot_registry.get_bot(request.state.user_id).submit_trade(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/orders/{symbol}/cancel")
-def cancel_orders(symbol: str):
+def cancel_orders(symbol: str, request: Request):
     """Manual escape hatch: cancel every resting order on a symbol. Built for the
     duplicate-premarket-order bug (2026-08-26) - an unfilled limit buy doesn't show up
     in positions_as_dicts(), so auto_cycle's held_symbols check didn't see it and kept
     re-submitting a fresh entry every cycle. That's fixed at the source now, but this
     stays as a general-purpose way to clear stuck orders by hand."""
-    bot._cancel_open_orders(symbol)
+    bot_registry.get_bot(request.state.user_id)._cancel_open_orders(symbol)
     return {"symbol": symbol.upper(), "message": "Cancel requested for all open orders on this symbol."}
 
 

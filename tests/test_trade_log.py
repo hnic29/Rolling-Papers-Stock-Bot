@@ -65,3 +65,17 @@ def test_filled_trade_without_a_bracket_never_awaits_exit(tmp_path, monkeypatch)
     trade_log.update_fill(order_id="plain1", status="filled", filled_avg_price=200.0, filled_qty=1, filled_at="2026-08-10T00:00:00Z")
 
     assert trade_log.trades_awaiting_exit() == []
+
+
+def test_trades_default_to_user_1_and_stay_isolated_from_other_users(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
+
+    trade_log.record_trade(order_id="alice1", symbol="AAPL", side="buy", qty=1, status="accepted", user_id=1)
+    trade_log.record_trade(order_id="bob1", symbol="TSLA", side="buy", qty=1, status="accepted", user_id=2)
+
+    assert [t["order_id"] for t in trade_log.list_trades(user_id=1)] == ["alice1"]
+    assert [t["order_id"] for t in trade_log.list_trades(user_id=2)] == ["bob1"]
+    assert trade_log.pending_order_ids(user_id=1) == ["alice1"]
+    assert trade_log.pending_order_ids(user_id=2) == ["bob1"]
+    assert trade_log.pending_buy_symbols(user_id=1) == {"AAPL"}
+    assert trade_log.pending_buy_symbols(user_id=2) == {"TSLA"}

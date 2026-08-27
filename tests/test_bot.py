@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models import Candle, PullbackSetup, ScannerResponse, ScannerResult, Signal, StockCandidate, StrategyDecision, TradeRequest
-from app.services import bankroll, bot_state, trade_log
+from app.services import bankroll, bot_state, credentials, trade_log
 from app.services.bot import PREMARKET_LIMIT_BUFFER_PCT, STALE_UNIVERSE_DAYS, TradingBot, current_trading_day
 
 
@@ -23,8 +23,8 @@ def _fund_bankroll(monkeypatch, amount=100_000.0):
     both functions since risk_per_trade_pct/max_position_value_pct sizing
     reads current_bankroll(), while the hard availability gate reads
     available_to_trade() - a real bankroll would have both agree."""
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: amount)
-    monkeypatch.setattr(bankroll, "current_bankroll", lambda: amount)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: amount)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda user_id=1: amount)
 
 
 def _candidate(symbol, score=4):
@@ -77,6 +77,7 @@ def test_successful_trade_is_recorded_in_history(tmp_path, monkeypatch):
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -93,12 +94,13 @@ def test_successful_trade_is_recorded_in_history(tmp_path, monkeypatch):
 
 def test_submit_trade_rejects_a_manual_buy_with_no_bankroll(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 0.0)
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         with pytest.raises(ValueError, match="No bankroll available"):
             bot.submit_trade(TradeRequest(symbol="AAPL", qty=1, side=Signal.buy))
@@ -108,12 +110,13 @@ def test_submit_trade_rejects_a_manual_buy_with_no_bankroll(tmp_path, monkeypatc
 
 def test_submit_trade_rejects_a_manual_buy_that_exceeds_the_bankroll(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 100.0)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 100.0)
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         # 10 shares @ $50 estimated = $500, well over the $100 available.
         with pytest.raises(ValueError, match="bankroll"):
@@ -135,6 +138,7 @@ def test_submit_trade_allows_a_sell_regardless_of_bankroll(tmp_path, monkeypatch
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker, patch("app.services.bot.bankroll") as MockBankroll:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBankroll.available_to_trade.return_value = 0.0
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -164,6 +168,7 @@ def test_a_manual_sell_links_the_exit_back_to_the_buy_row(tmp_path, monkeypatch)
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -180,6 +185,7 @@ def test_auto_cycle_is_a_no_op_when_auto_trading_is_disabled():
     bot.status.auto_trading_enabled = False
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         bot.auto_cycle()
 
@@ -197,6 +203,7 @@ def test_auto_cycle_skips_when_market_is_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "_in_premarket_window", lambda now: False)  # neither regular hours nor premarket
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         bot.auto_cycle()
@@ -212,6 +219,7 @@ def test_auto_cycle_skips_outside_the_trading_window(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: False)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -285,6 +293,7 @@ def test_auto_cycle_walks_away_after_an_hour_with_no_trades(monkeypatch, tmp_pat
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -307,6 +316,7 @@ def test_auto_cycle_does_not_walk_away_within_the_first_hour(monkeypatch, tmp_pa
     monkeypatch.setattr(bot, "_in_premarket_window", lambda now: False)  # neither regular hours nor premarket
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         bot.auto_cycle()
@@ -350,6 +360,7 @@ def test_auto_cycle_gap_lane_trades_a_live_gapper_the_lagged_scan_cannot_see(tmp
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -395,9 +406,10 @@ def test_a_dilution_risk_catalyst_halves_position_size(tmp_path, monkeypatch):
     fake_order.status = "accepted"
 
     sent = []
-    monkeypatch.setattr("app.services.bot.notify.send", lambda title, message, **kw: sent.append(title))
+    monkeypatch.setattr("app.services.bot.notify.send", lambda topic, title, message, **kw: sent.append(title))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -422,6 +434,7 @@ def test_a_dilution_risk_catalyst_halves_position_size(tmp_path, monkeypatch):
     monkeypatch.setattr(bot2.strategy, "evaluate", lambda setup: StrategyDecision(signal=Signal.buy, confidence=0.8, reasons=["ok"], risk_per_share=0.1, first_target=5.2))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -461,6 +474,7 @@ def test_premarket_entry_without_a_catalyst_is_skipped(tmp_path, monkeypatch):
     bot = _premarket_bot(monkeypatch, tmp_path, candidate)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -481,6 +495,7 @@ def test_premarket_entry_with_a_dilution_risk_catalyst_is_skipped_outright(tmp_p
     bot = _premarket_bot(monkeypatch, tmp_path, candidate)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -504,6 +519,7 @@ def test_premarket_entry_with_a_positive_catalyst_proceeds(tmp_path, monkeypatch
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
@@ -539,6 +555,7 @@ def test_regular_hours_entry_without_news_is_not_blocked(tmp_path, monkeypatch):
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -632,6 +649,7 @@ def test_auto_cycle_stays_paused_once_walked_away_for_the_day(monkeypatch, tmp_p
     bot.status.walk_away_reason = "3 losing trades in a row"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -660,6 +678,7 @@ def test_auto_cycle_places_a_bracket_trade_for_a_real_buy_signal(tmp_path, monke
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -682,7 +701,7 @@ def test_auto_cycle_places_a_bracket_trade_for_a_real_buy_signal(tmp_path, monke
 
 def test_auto_cycle_places_no_trade_when_bankroll_is_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 0.0)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -690,6 +709,7 @@ def test_auto_cycle_places_no_trade_when_bankroll_is_empty(tmp_path, monkeypatch
     monkeypatch.setattr(bot, "_within_trading_window", lambda now: True)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -704,8 +724,8 @@ def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypat
     # $5/share entry - $15 *available* covers only 3 shares, well under what the
     # risk/capital percentages alone would otherwise allow off a large overall bankroll
     # (most of it just isn't available right now - e.g. tied up in other positions).
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 15.0)
-    monkeypatch.setattr(bankroll, "current_bankroll", lambda: 100_000.0)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 15.0)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda user_id=1: 100_000.0)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -722,6 +742,7 @@ def test_auto_cycle_caps_position_size_to_available_bankroll(tmp_path, monkeypat
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -740,8 +761,8 @@ def test_premarket_sizing_respects_the_position_cap_against_the_buffered_limit_p
     over it) that risk.validate correctly rejected, silently dropping the trade to
     "skipped" with no order ever submitted. Sizing must use the buffered price."""
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 100_000.0)
-    monkeypatch.setattr(bankroll, "current_bankroll", lambda: 100_000.0)  # 20% cap = $20,000
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 100_000.0)
+    monkeypatch.setattr(bankroll, "current_bankroll", lambda user_id=1: 100_000.0)  # 20% cap = $20,000
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
@@ -767,6 +788,7 @@ def test_premarket_sizing_respects_the_position_cap_against_the_buffered_limit_p
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
@@ -794,6 +816,7 @@ def test_auto_cycle_skips_symbols_already_held(monkeypatch, tmp_path):
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 10}]
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -819,6 +842,7 @@ def test_auto_cycle_does_not_stack_a_duplicate_order_on_an_unfilled_pending_buy(
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []  # unfilled - not a position yet
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -843,6 +867,7 @@ def test_auto_cycle_flags_a_stale_universe_in_its_status_message(monkeypatch, tm
     monkeypatch.setattr(bot.scanner, "universe_age_days", lambda: STALE_UNIVERSE_DAYS + 10)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -865,6 +890,7 @@ def test_auto_cycle_does_not_flag_a_fresh_universe(monkeypatch, tmp_path):
     monkeypatch.setattr(bot.scanner, "universe_age_days", lambda: 1)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -886,6 +912,7 @@ def test_manage_open_positions_closes_on_a_red_candle_exit_signal(tmp_path, monk
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -917,6 +944,7 @@ def test_manage_open_positions_cancels_resting_orders_before_selling(tmp_path, m
     resting_stop.id = "resting-stop-1"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.open_orders.return_value = [resting_stop]
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -946,6 +974,7 @@ def test_manage_open_positions_links_the_exit_back_to_the_buy_row(tmp_path, monk
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -976,6 +1005,7 @@ def test_a_position_reaching_2r_gets_its_stop_moved_to_breakeven(tmp_path, monke
     stop_order.id = "breakeven-stop-1"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_stop_order.return_value = stop_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -1007,6 +1037,7 @@ def test_a_2r_winner_falling_back_to_1r_is_closed_as_giveback(tmp_path, monkeypa
     stop_order.id = "breakeven-stop-1"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_stop_order.return_value = stop_order
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -1029,6 +1060,7 @@ def test_a_position_below_2r_is_left_alone(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         exited = bot._manage_open_positions([{"symbol": "RUNR", "qty": 40, "current_price": 10.60}])  # only +1.2R
 
@@ -1048,6 +1080,7 @@ def test_a_stopless_manual_position_gets_no_2r_management(tmp_path, monkeypatch)
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
         exited = bot._manage_open_positions([{"symbol": "MANU", "qty": 10, "current_price": 50.0}])  # up 10x, still untouched
 
@@ -1061,6 +1094,7 @@ def test_manage_open_positions_leaves_a_quiet_position_open(tmp_path, monkeypatc
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         exited = bot._manage_open_positions([{"symbol": "ACHR", "qty": 10}])
 
     assert exited == []
@@ -1073,7 +1107,7 @@ def test_manage_open_positions_works_even_when_bankroll_is_empty(tmp_path, monke
     the moment managing it matters most. manage_open_positions() doesn't even look at
     bankroll, unlike auto_cycle() (new entries), which correctly does."""
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr(bankroll, "available_to_trade", lambda: 0.0)
+    monkeypatch.setattr(bankroll, "available_to_trade", lambda user_id=1: 0.0)
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
@@ -1085,6 +1119,7 @@ def test_manage_open_positions_works_even_when_bankroll_is_empty(tmp_path, monke
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 10}]
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -1113,6 +1148,7 @@ def test_manage_open_positions_works_even_when_walked_away_for_the_day(tmp_path,
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 10}]
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -1145,6 +1181,7 @@ def test_manage_open_positions_works_even_when_auto_trading_is_disabled(tmp_path
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "SMTK", "qty": 1}]
         MockBroker.return_value.submit_market_order.return_value = fake_order
@@ -1173,6 +1210,7 @@ def test_auto_cycle_no_longer_manages_positions_itself(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.bot.build_pullback_setup", lambda symbol, scanner, candidate=None: _setup(symbol, _RED_CANDLE))
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 10}]
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
@@ -1253,7 +1291,7 @@ def test_a_submitted_buy_sends_a_notification(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
     _fund_bankroll(monkeypatch)
     sent = []
-    monkeypatch.setattr("app.services.bot.notify.send", lambda title, message, **kw: sent.append((title, message)))
+    monkeypatch.setattr("app.services.bot.notify.send", lambda topic, title, message, **kw: sent.append((title, message)))
 
     bot = TradingBot()
     bot.status.daily_pnl = 0.0
@@ -1264,6 +1302,7 @@ def test_a_submitted_buy_sends_a_notification(tmp_path, monkeypatch):
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -1291,6 +1330,7 @@ def test_a_sell_does_not_send_a_submission_notification(tmp_path, monkeypatch):
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.submit_market_order.return_value = fake_order
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -1304,7 +1344,7 @@ def test_tripping_a_walk_away_sends_a_high_priority_notification(tmp_path, monke
     sent = []
     monkeypatch.setattr(
         "app.services.bot.notify.send",
-        lambda title, message, priority="default", **kw: sent.append((title, priority)),
+        lambda topic, title, message, priority="default", **kw: sent.append((title, priority)),
     )
 
     bot = TradingBot()
@@ -1332,6 +1372,7 @@ def test_market_open_close_notifications_prime_silently_on_first_check(tmp_path,
 
     bot = TradingBot()
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         bot.check_market_open_close_notifications()
 
@@ -1344,13 +1385,14 @@ def test_market_open_close_notifications_fire_on_each_transition(tmp_path, monke
     sent = []
     monkeypatch.setattr(
         "app.services.bot.notify.send",
-        lambda title, message, **kw: sent.append((title, message)),
+        lambda topic, title, message, **kw: sent.append((title, message)),
     )
 
     bot = TradingBot()
     bot._last_known_market_open = False  # already primed, as if the bot has been running a while
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         bot.check_market_open_close_notifications()  # closed -> open
 
@@ -1359,6 +1401,7 @@ def test_market_open_close_notifications_fire_on_each_transition(tmp_path, monke
 
     _record_realized_trade("mc1", 12.5, datetime.now(UTC))
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         bot.check_market_open_close_notifications()  # open -> closed
 
@@ -1377,6 +1420,7 @@ def test_market_open_close_notifications_stay_silent_with_no_transition(tmp_path
     bot._last_known_market_open = True
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         bot.check_market_open_close_notifications()
         bot.check_market_open_close_notifications()
@@ -1393,7 +1437,7 @@ def test_refresh_status_reflects_a_runtime_paper_mode_change(tmp_path, monkeypat
     bot = TradingBot()
     assert bot.status.paper is True
 
-    monkeypatch.setattr("app.services.bot.settings.alpaca_paper", False)
+    credentials.save_credentials(user_id=1, alpaca_paper=False)
     bot.refresh_status()
 
     assert bot.status.paper is False
@@ -1480,6 +1524,7 @@ def test_auto_cycle_places_an_extended_hours_limit_order_premarket(tmp_path, mon
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)  # market closed
         MockBroker.return_value.positions_as_dicts.return_value = []
         MockBroker.return_value.submit_extended_hours_limit_order.return_value = fake_order
@@ -1501,13 +1546,14 @@ def test_auto_cycle_places_an_extended_hours_limit_order_premarket(tmp_path, mon
 
 def test_auto_cycle_stays_idle_premarket_when_the_feature_is_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.config.settings.premarket_trading_enabled", False)
+    credentials.save_credentials(user_id=1, premarket_trading_enabled=False)
 
     bot = TradingBot()
     bot.status.auto_trading_enabled = True
     monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -1533,6 +1579,7 @@ def test_manage_open_positions_runs_premarket_not_just_regular_hours(tmp_path, m
     fake_order.status = "accepted"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)  # premarket
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "RCON", "qty": 40, "current_price": 9.0}]
         MockBroker.return_value.open_orders.return_value = []
@@ -1551,11 +1598,12 @@ def test_manage_open_positions_runs_premarket_not_just_regular_hours(tmp_path, m
 
 def test_manage_open_positions_ignores_premarket_when_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_log, "DB_PATH", tmp_path / "trade_log.db")
-    monkeypatch.setattr("app.config.settings.premarket_trading_enabled", False)
+    credentials.save_credentials(user_id=1, premarket_trading_enabled=False)
     bot = TradingBot()
     monkeypatch.setattr(bot, "_in_premarket_window", lambda now: True)
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=False)
         MockBroker.return_value.daily_pnl.side_effect = Exception("no live account in test")
 
@@ -1577,6 +1625,7 @@ def test_regular_hours_open_arms_a_stop_for_a_premarket_filled_position(tmp_path
     stop_order.id = "arm-stop-1"
 
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)  # regular hours now
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "RCON", "qty": 40, "current_price": 6.2}]
         MockBroker.return_value.open_orders.return_value = []  # nothing resting - premarket fill had no bracket
@@ -1601,6 +1650,7 @@ def test_regular_hours_open_does_not_rearm_a_stop_that_already_exists(tmp_path, 
 
     existing_stop = MagicMock()
     with patch("app.services.bot.AlpacaBroker") as MockBroker:
+        MockBroker.for_user.side_effect = lambda user_id: MockBroker.return_value
         MockBroker.return_value.client.get_clock.return_value = MagicMock(is_open=True)
         MockBroker.return_value.positions_as_dicts.return_value = [{"symbol": "ACHR", "qty": 40, "current_price": 6.2}]
         MockBroker.return_value.open_orders.return_value = [existing_stop]  # bracket stop already resting
