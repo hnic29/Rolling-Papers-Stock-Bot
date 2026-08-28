@@ -734,6 +734,10 @@ const HANDLE_HIT_RADIUS = 9;
 
 function setSelectedDrawing(drawing) {
   selectedDrawing = drawing;
+  // Keep the swatch honest about what it actually controls: the selected
+  // drawing's own color while one is selected, otherwise the color the next
+  // new drawing will get.
+  document.querySelector("#draw-color").value = drawing ? drawingColor(drawing) : activeDrawColor;
   if (chartState) renderChart();
 }
 
@@ -2478,6 +2482,10 @@ document.querySelector("#sidebar-collapse-toggle").addEventListener("click", () 
 
 document.querySelector("#draw-color").addEventListener("input", (event) => {
   activeDrawColor = event.target.value;
+  if (selectedDrawing) {
+    selectedDrawing.color = activeDrawColor;
+    if (chartState) renderChart();
+  }
 });
 
 document.querySelector("#clear-drawings").addEventListener("click", () => {
