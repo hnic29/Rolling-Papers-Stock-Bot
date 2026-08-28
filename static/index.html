@@ -172,13 +172,35 @@
               <button id="toggle-chart-expand" type="button" title="Open this chart in a larger view">Expand</button>
             </div>
           </div>
-          <div class="drawing-toolbar" id="drawing-toolbar">
-            <div class="draw-tool-picker" id="draw-tool-picker">
-              <button type="button" id="draw-tool-toggle">
-                <span id="draw-tool-label">Cursor</span> <span class="draw-tool-caret">&#9662;</span>
-              </button>
-              <div class="draw-tool-menu" id="draw-tool-menu" hidden>
-                <button type="button" class="draw-tool-item active" data-tool="cursor">Cursor</button>
+          <div class="replay-toolbar" id="replay-toolbar" hidden>
+            <button type="button" id="replay-step-back" title="Step back">&#9198;</button>
+            <button type="button" id="replay-play-pause" title="Play/pause">&#9654;</button>
+            <button type="button" id="replay-step-forward" title="Step forward">&#9197;</button>
+            <label>Speed
+              <select id="replay-speed">
+                <option value="1500">0.5x</option>
+                <option value="800" selected>1x</option>
+                <option value="400">2x</option>
+                <option value="150">4x</option>
+              </select>
+            </label>
+            <label>Step
+              <select id="replay-step-size">
+                <option value="1" selected>1 bar</option>
+                <option value="5">5 bars</option>
+                <option value="15">15 bars</option>
+                <option value="60">60 bars</option>
+              </select>
+            </label>
+            <span id="replay-position" class="replay-position">-</span>
+            <button type="button" id="exit-replay">Exit Replay</button>
+          </div>
+          <p class="chart-hint" id="chart-hint">Scroll to zoom, drag to pan, double-click to reset zoom. Click a drawing to select it, drag its handles or body to adjust it.</p>
+          <div class="chart-body">
+            <aside class="draw-tool-sidebar" id="draw-tool-sidebar">
+              <button type="button" id="sidebar-collapse-toggle" title="Collapse the tool sidebar">&#9666;</button>
+              <div class="draw-tool-sidebar-content" id="draw-tool-sidebar-content">
+                <button type="button" class="draw-tool-item active" data-tool="cursor" title="Cursor - pan, select, and drag drawings">Cursor</button>
                 <div class="draw-tool-group-label">Lines</div>
                 <button type="button" class="draw-tool-item" data-tool="trendline">Trendline</button>
                 <button type="button" class="draw-tool-item" data-tool="ray">Ray</button>
@@ -203,39 +225,16 @@
                 <button type="button" class="draw-tool-item" data-tool="fib">Fibonacci retracement</button>
                 <button type="button" class="draw-tool-item" data-tool="rectangle">Rectangle</button>
                 <button type="button" class="draw-tool-item" data-tool="text">Text</button>
+                <div class="draw-tool-group-label">Actions</div>
+                <label class="draw-color-label">Color <input type="color" id="draw-color" value="#8ab4f8" title="Color for new drawings" /></label>
+                <button type="button" id="erase-tool" class="draw-tool-item" data-tool="erase" title="Click a drawing to remove it">Erase</button>
+                <button type="button" id="clear-drawings" class="draw-tool-item">Clear All</button>
               </div>
+            </aside>
+            <div class="chart-wrap">
+              <canvas id="candlestick-chart" width="1040" height="360"></canvas>
+              <div id="chart-tooltip" class="chart-tooltip" hidden></div>
             </div>
-            <label class="draw-color-label">Color <input type="color" id="draw-color" value="#8ab4f8" title="Color for new drawings" /></label>
-            <button type="button" id="erase-tool" data-tool="erase" title="Click a drawing to remove it">Erase</button>
-            <button type="button" id="clear-drawings" title="Remove all drawings for this symbol">Clear All</button>
-          </div>
-          <div class="replay-toolbar" id="replay-toolbar" hidden>
-            <button type="button" id="replay-step-back" title="Step back">&#9198;</button>
-            <button type="button" id="replay-play-pause" title="Play/pause">&#9654;</button>
-            <button type="button" id="replay-step-forward" title="Step forward">&#9197;</button>
-            <label>Speed
-              <select id="replay-speed">
-                <option value="1500">0.5x</option>
-                <option value="800" selected>1x</option>
-                <option value="400">2x</option>
-                <option value="150">4x</option>
-              </select>
-            </label>
-            <label>Step
-              <select id="replay-step-size">
-                <option value="1" selected>1 bar</option>
-                <option value="5">5 bars</option>
-                <option value="15">15 bars</option>
-                <option value="60">60 bars</option>
-              </select>
-            </label>
-            <span id="replay-position" class="replay-position">-</span>
-            <button type="button" id="exit-replay">Exit Replay</button>
-          </div>
-          <p class="chart-hint" id="chart-hint">Scroll to zoom, drag to pan, double-click to reset zoom.</p>
-          <div class="chart-wrap">
-            <canvas id="candlestick-chart" width="1040" height="360"></canvas>
-            <div id="chart-tooltip" class="chart-tooltip" hidden></div>
           </div>
         </article>
         <div class="chart-expand-backdrop" id="chart-expand-backdrop" hidden></div>

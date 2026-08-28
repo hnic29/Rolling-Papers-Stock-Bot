@@ -448,6 +448,8 @@ function startAutoRefresh(fn, intervalMs) {
 function setChartData(symbol, bars) {
   pendingDrawing = null;
   previewPoint = null;
+  selectedDrawing = null;
+  dragState = null;
   stopReplay();
   chartState = { symbol, bars, view: { start: 0, end: bars.length } };
   renderChart();
@@ -721,6 +723,25 @@ let previewPoint = null;
 const drawingsBySymbol = {};
 let activeDrawColor = "#8ab4f8";
 
+// Editing an already-placed drawing (Cursor tool only): click one to select it -
+// selectedDrawing is a direct reference into currentDrawings(), not a copy, so
+// mutating its .points in place is all dragging needs to do. dragState tracks
+// whether the current drag is moving one handle ("point") or the whole shape
+// ("move"), and is null the rest of the time.
+let selectedDrawing = null;
+let dragState = null;
+const HANDLE_HIT_RADIUS = 9;
+
+function setSelectedDrawing(drawing) {
+  selectedDrawing = drawing;
+  if (chartState) renderChart();
+}
+
+function handleIndexAtCanvasXY(drawing, x, y) {
+  if (!drawing) return -1;
+  return drawing.points.findIndex((p) => Math.hypot(x - xForPoint(p), y - yForPrice(p.price)) <= HANDLE_HIT_RADIUS);
+}
+
 const DRAWING_POINTS_REQUIRED = {
   trendline: 2,
   ray: 2,
@@ -925,10 +946,8 @@ function setDrawTool(tool) {
   activeDrawTool = tool;
   pendingDrawing = null;
   previewPoint = null;
+  if (tool !== "cursor") setSelectedDrawing(null);
   document.querySelectorAll(".draw-tool-item").forEach((btn) => btn.classList.toggle("active", btn.dataset.tool === tool));
-  const active = document.querySelector(`.draw-tool-item[data-tool="${tool}"]`);
-  document.querySelector("#draw-tool-label").textContent = active ? active.textContent : "Cursor";
-  document.querySelector("#erase-tool").classList.toggle("active", tool === "erase");
   const canvas = document.querySelector("#candlestick-chart");
   canvas.classList.toggle("drawing", tool !== "cursor" && tool !== "erase");
   canvas.classList.toggle("erasing", tool === "erase");
@@ -1167,6 +1186,7 @@ function eraseDrawingNear(x, y) {
   const list = currentDrawings();
   for (let i = list.length - 1; i >= 0; i -= 1) {
     if (hitTestDrawing(list[i], x, y, 8)) {
+      if (list[i] === selectedDrawing) selectedDrawing = null;
       list.splice(i, 1);
       renderChart();
       return;
@@ -1574,6 +1594,21 @@ function drawAnnotations(ctx) {
     renderDrawing(ctx, { ...pendingDrawing, points: [...pendingDrawing.points, previewPoint] }, true);
   }
 
+  if (selectedDrawing && currentDrawings().includes(selectedDrawing)) {
+    renderDrawing(ctx, selectedDrawing); // redraw slightly thicker/brighter on top so the selection reads clearly
+    ctx.lineWidth = 2.5;
+    selectedDrawing.points.forEach((p) => {
+      const px = xForPoint(p);
+      const py = yForPrice(p.price);
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fillStyle = "#03080e";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+    });
+  }
+
   ctx.restore();
   ctx.setLineDash([]);
 }
@@ -1617,9 +1652,61 @@ let panState = null;
 
 function startPan(event) {
   if (activeDrawTool !== "cursor") return;
-  if (!chartState || !chartState.bars.length) return;
+  if (!chartState || !chartState.bars.length || !chartState.padding) return;
+  const { x, y } = eventToCanvasXY(event);
+
+  // A drawing is already selected - grabbing one of its handles adjusts just that
+  // point; grabbing anywhere else on the drawing's body moves the whole thing.
+  // Either way this takes priority over panning, which only kicks in once nothing
+  // under the cursor is selectable.
+  if (selectedDrawing) {
+    const pointIndex = handleIndexAtCanvasXY(selectedDrawing, x, y);
+    if (pointIndex !== -1) {
+      dragState = { mode: "point", drawing: selectedDrawing, pointIndex };
+      document.querySelector("#candlestick-chart").classList.add("dragging");
+      return;
+    }
+    if (hitTestDrawing(selectedDrawing, x, y, 8)) {
+      dragState = {
+        mode: "move",
+        drawing: selectedDrawing,
+        startDataPoint: dataPointFromCanvasXY(x, y),
+        originalPoints: selectedDrawing.points.map((p) => ({ ...p })),
+      };
+      document.querySelector("#candlestick-chart").classList.add("dragging");
+      return;
+    }
+  }
+
+  const hit = currentDrawings().find((d) => hitTestDrawing(d, x, y, 8));
+  if (hit) {
+    setSelectedDrawing(hit);
+    return;
+  }
+  if (selectedDrawing) setSelectedDrawing(null);
+
   panState = { startX: event.clientX, view: { ...chartState.view } };
   document.querySelector("#candlestick-chart").classList.add("panning");
+}
+
+function dragDrawing(event) {
+  if (!dragState || !chartState) return;
+  const { x, y } = eventToCanvasXY(event);
+  const point = dataPointFromCanvasXY(x, y);
+  if (dragState.mode === "point") {
+    dragState.drawing.points[dragState.pointIndex] = point;
+  } else {
+    const dTime = point.time - dragState.startDataPoint.time;
+    const dPrice = point.price - dragState.startDataPoint.price;
+    dragState.drawing.points = dragState.originalPoints.map((p) => ({ time: p.time + dTime, price: p.price + dPrice }));
+  }
+  renderChart();
+}
+
+function endDrag() {
+  if (!dragState) return;
+  dragState = null;
+  document.querySelector("#candlestick-chart").classList.remove("dragging");
 }
 
 function panChart(event) {
@@ -2346,6 +2433,10 @@ const candlestickChart = document.querySelector("#candlestick-chart");
 candlestickChart.addEventListener("wheel", zoomChart, { passive: false });
 candlestickChart.addEventListener("mousedown", startPan);
 candlestickChart.addEventListener("mousemove", (event) => {
+  if (dragState) {
+    dragDrawing(event);
+    return;
+  }
   if (panState) {
     panChart(event);
     return;
@@ -2358,8 +2449,12 @@ candlestickChart.addEventListener("mousemove", (event) => {
   }
   showChartTooltip(event);
 });
-candlestickChart.addEventListener("mouseup", endPan);
+candlestickChart.addEventListener("mouseup", () => {
+  endDrag();
+  endPan();
+});
 candlestickChart.addEventListener("mouseleave", () => {
+  endDrag();
   endPan();
   hideChartTooltip();
 });
@@ -2369,43 +2464,17 @@ candlestickChart.addEventListener("dblclick", () => {
 });
 document.querySelector("#reset-zoom").addEventListener("click", resetChartZoom);
 
-// Fixed-position (not absolute) and placed by JS from the toggle button's real
-// viewport position, with its max-height clamped to whatever space is actually
-// left below it - a long menu (25 tools) anchored with plain CSS `position:
-// absolute` can extend past the bottom of the viewport when the button itself
-// isn't near the top of the page, and items below the fold become unreachable
-// without scrolling the whole page (the menu's own internal scroll never gets a
-// chance to help, since the box itself starts off-screen).
-function positionDrawToolMenu() {
-  const toggle = document.querySelector("#draw-tool-toggle");
-  const menu = document.querySelector("#draw-tool-menu");
-  const rect = toggle.getBoundingClientRect();
-  const margin = 12;
-  menu.style.left = `${Math.round(rect.left)}px`;
-  menu.style.top = `${Math.round(rect.bottom + 6)}px`;
-  menu.style.maxHeight = `${Math.max(120, Math.round(window.innerHeight - rect.bottom - 6 - margin))}px`;
-}
-
-document.querySelector("#draw-tool-toggle").addEventListener("click", () => {
-  const menu = document.querySelector("#draw-tool-menu");
-  menu.hidden = !menu.hidden;
-  if (!menu.hidden) positionDrawToolMenu();
+// Every tool sits directly in the sidebar now (no popup menu to open/close) -
+// picking one is just a single click.
+document.querySelectorAll(".draw-tool-item[data-tool]").forEach((btn) => {
+  btn.addEventListener("click", () => setDrawTool(btn.dataset.tool));
 });
 
-document.querySelectorAll(".draw-tool-item").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    setDrawTool(btn.dataset.tool);
-    document.querySelector("#draw-tool-menu").hidden = true;
-  });
+document.querySelector("#sidebar-collapse-toggle").addEventListener("click", () => {
+  document.querySelector("#draw-tool-sidebar").classList.toggle("collapsed");
+  // The chart got wider or narrower - resize its buffer to match, same as expand/collapse.
+  requestAnimationFrame(resizeCandlestickCanvas);
 });
-
-document.addEventListener("click", (event) => {
-  const picker = document.querySelector("#draw-tool-picker");
-  const menu = document.querySelector("#draw-tool-menu");
-  if (picker && !menu.hidden && !picker.contains(event.target)) menu.hidden = true;
-});
-
-document.querySelector("#erase-tool").addEventListener("click", () => setDrawTool("erase"));
 
 document.querySelector("#draw-color").addEventListener("input", (event) => {
   activeDrawColor = event.target.value;
@@ -2414,6 +2483,7 @@ document.querySelector("#draw-color").addEventListener("input", (event) => {
 document.querySelector("#clear-drawings").addEventListener("click", () => {
   if (!chartState) return;
   drawingsBySymbol[chartState.symbol] = [];
+  selectedDrawing = null;
   renderChart();
 });
 
@@ -2468,9 +2538,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingDrawing) cancelPendingDrawing();
   if (event.key === "Escape" && awaitingReplayStart) stopReplay();
   if (event.key === "Escape" && replayState) exitReplay();
-  if (event.key === "Escape" && !document.querySelector("#draw-tool-menu").hidden) {
-    document.querySelector("#draw-tool-menu").hidden = true;
-  }
+  if (event.key === "Escape" && selectedDrawing) setSelectedDrawing(null);
   if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
     toggleChartExpanded();
   }
