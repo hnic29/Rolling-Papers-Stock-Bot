@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from alpaca.common.enums import Sort
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import UTC, date, datetime, time, timedelta
@@ -35,6 +35,7 @@ from app.paths import resource_path
 from app.services import bankroll, bot_registry, credentials, notify, trade_log, trade_sync, users
 from app.services.backtest import run_daily_backtest
 from app.services.env_file import mask_secret
+from app.services.finnhub_live import stream_trades
 from app.services.fmp import FmpClient
 from app.services.scanner import MarketScanner
 from app.services.session_auth import (
@@ -43,6 +44,7 @@ from app.services.session_auth import (
     SessionAuthMiddleware,
     create_session_token,
     resolve_optional_user_id,
+    verify_session_token,
 )
 
 
@@ -173,6 +175,7 @@ def get_settings(request: Request):
         alpaca_secret_key=mask_secret(creds["alpaca_secret_key"]),
         alpaca_paper=creds["alpaca_paper"],
         fmp_api_key=mask_secret(creds["fmp_api_key"]),
+        finnhub_api_key=mask_secret(creds["finnhub_api_key"]),
         allow_live_trading=creds["allow_live_trading"],
         ntfy_topic=creds["ntfy_topic"],
     )
@@ -203,6 +206,8 @@ def save_settings(body: AppSettingsUpdate, request: Request):
         updates["alpaca_secret_key"] = _clean_api_key(body.alpaca_secret_key)
     if body.fmp_api_key and "..." not in body.fmp_api_key:
         updates["fmp_api_key"] = _clean_api_key(body.fmp_api_key)
+    if body.finnhub_api_key and "..." not in body.finnhub_api_key:
+        updates["finnhub_api_key"] = _clean_api_key(body.finnhub_api_key)
 
     credentials.save_credentials(user_id, **updates)
 
@@ -574,6 +579,24 @@ def bars(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not fetch Alpaca bars for {symbol.upper()}: {exc}") from exc
+
+
+@app.websocket("/ws/live/{symbol}")
+async def live_chart_stream(websocket: WebSocket, symbol: str):
+    """Chart-only real-time overlay (see finnhub_live.py) - not on the HTTP auth
+    middleware's path, so the session cookie is checked by hand here instead."""
+    await websocket.accept()
+    user_id = verify_session_token(websocket.cookies.get(SESSION_COOKIE_NAME) or "")
+    if user_id is None:
+        await websocket.send_json({"error": "Login required."})
+        await websocket.close()
+        return
+    api_key = credentials.get_credentials(user_id)["finnhub_api_key"]
+    if not api_key:
+        await websocket.send_json({"error": "Add a Finnhub API key in Settings to use live data."})
+        await websocket.close()
+        return
+    await stream_trades(websocket, symbol, api_key)
 
 
 @app.post("/api/trade")

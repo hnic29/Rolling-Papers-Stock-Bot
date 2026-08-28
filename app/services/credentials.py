@@ -21,6 +21,7 @@ _DEFAULTS = {
     "alpaca_paper": True,
     "allow_live_trading": False,
     "fmp_api_key": "",
+    "finnhub_api_key": "",
     "ntfy_topic": "",
     "risk_per_trade_pct": 2.0,
     "max_position_value_pct": 20.0,
@@ -46,6 +47,7 @@ def _connect() -> sqlite3.Connection:
             alpaca_paper INTEGER NOT NULL DEFAULT 1,
             allow_live_trading INTEGER NOT NULL DEFAULT 0,
             fmp_api_key_encrypted TEXT,
+            finnhub_api_key_encrypted TEXT,
             ntfy_topic TEXT NOT NULL DEFAULT '',
             risk_per_trade_pct REAL NOT NULL DEFAULT 2.0,
             max_position_value_pct REAL NOT NULL DEFAULT 20.0,
@@ -70,6 +72,10 @@ def _connect() -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE user_credentials ADD COLUMN {column} NOT NULL DEFAULT {default}")
         except sqlite3.OperationalError:
             pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE user_credentials ADD COLUMN finnhub_api_key_encrypted TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn
 
 
@@ -122,6 +128,7 @@ def get_credentials(user_id: int) -> dict:
         "alpaca_paper": bool(data["alpaca_paper"]),
         "allow_live_trading": bool(data["allow_live_trading"]),
         "fmp_api_key": _decrypt(data["fmp_api_key_encrypted"]),
+        "finnhub_api_key": _decrypt(data["finnhub_api_key_encrypted"]),
         "ntfy_topic": data["ntfy_topic"],
         "risk_per_trade_pct": data["risk_per_trade_pct"],
         "max_position_value_pct": data["max_position_value_pct"],
@@ -151,16 +158,18 @@ def save_credentials(user_id: int, **fields) -> dict:
             """
             INSERT INTO user_credentials (
                 user_id, alpaca_api_key_encrypted, alpaca_secret_key_encrypted, alpaca_paper,
-                allow_live_trading, fmp_api_key_encrypted, ntfy_topic, risk_per_trade_pct,
-                max_position_value_pct, max_daily_loss_pct, max_trades_per_day, premarket_trading_enabled,
-                max_consecutive_losses, max_daily_giveback_pct, max_minutes_without_trade
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                allow_live_trading, fmp_api_key_encrypted, finnhub_api_key_encrypted, ntfy_topic,
+                risk_per_trade_pct, max_position_value_pct, max_daily_loss_pct, max_trades_per_day,
+                premarket_trading_enabled, max_consecutive_losses, max_daily_giveback_pct,
+                max_minutes_without_trade
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 alpaca_api_key_encrypted = excluded.alpaca_api_key_encrypted,
                 alpaca_secret_key_encrypted = excluded.alpaca_secret_key_encrypted,
                 alpaca_paper = excluded.alpaca_paper,
                 allow_live_trading = excluded.allow_live_trading,
                 fmp_api_key_encrypted = excluded.fmp_api_key_encrypted,
+                finnhub_api_key_encrypted = excluded.finnhub_api_key_encrypted,
                 ntfy_topic = excluded.ntfy_topic,
                 risk_per_trade_pct = excluded.risk_per_trade_pct,
                 max_position_value_pct = excluded.max_position_value_pct,
@@ -178,6 +187,7 @@ def save_credentials(user_id: int, **fields) -> dict:
                 int(current["alpaca_paper"]),
                 int(current["allow_live_trading"]),
                 _encrypt(current["fmp_api_key"]),
+                _encrypt(current["finnhub_api_key"]),
                 current["ntfy_topic"],
                 current["risk_per_trade_pct"],
                 current["max_position_value_pct"],

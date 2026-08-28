@@ -11,3 +11,4 @@ yfinance==1.6.0
 bcrypt==4.2.1
 itsdangerous==2.2.0
 cryptography==43.0.3
+websockets==17.0.1

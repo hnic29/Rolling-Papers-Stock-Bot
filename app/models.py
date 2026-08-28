@@ -141,6 +141,7 @@ class AppSettingsResponse(BaseModel):
     alpaca_secret_key: str = ""
     alpaca_paper: bool = True
     fmp_api_key: str = ""
+    finnhub_api_key: str = ""
     allow_live_trading: bool = False
     ntfy_topic: str = ""
 
@@ -150,6 +151,7 @@ class AppSettingsUpdate(BaseModel):
     alpaca_secret_key: str = ""
     alpaca_paper: bool = True
     fmp_api_key: str = ""
+    finnhub_api_key: str = ""
     allow_live_trading: bool = False
     # Must be explicitly true on any save that arms live trading (alpaca_paper off AND
     # allow_live_trading on) - deliberate server-side friction so neither two mis-clicked

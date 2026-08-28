@@ -111,3 +111,18 @@ def test_migrate_legacy_settings_never_overwrites_an_existing_row():
     credentials.migrate_legacy_settings(user_id=1)
 
     assert credentials.get_credentials(1)["alpaca_api_key"] == "already-set-by-the-user"
+
+
+def test_finnhub_api_key_round_trips_through_encryption_like_the_other_keys():
+    assert credentials.get_credentials(user_id=1)["finnhub_api_key"] == ""
+
+    credentials.save_credentials(user_id=1, finnhub_api_key="finnhub-test-key-789")
+
+    creds = credentials.get_credentials(user_id=1)
+    assert creds["finnhub_api_key"] == "finnhub-test-key-789"
+
+    conn = credentials._connect()
+    row = conn.execute("SELECT finnhub_api_key_encrypted FROM user_credentials WHERE user_id = 1").fetchone()
+    conn.close()
+    assert row[0] is not None
+    assert "finnhub-test-key-789" not in row[0]

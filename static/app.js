@@ -360,6 +360,7 @@ async function loadSettings() {
     form.alpaca_api_key.value = settings.alpaca_api_key;
     form.alpaca_secret_key.value = settings.alpaca_secret_key;
     form.fmp_api_key.value = settings.fmp_api_key;
+    form.finnhub_api_key.value = settings.finnhub_api_key;
     form.ntfy_topic.value = settings.ntfy_topic || "";
     form.alpaca_paper.checked = settings.alpaca_paper;
     form.allow_live_trading.checked = settings.allow_live_trading;
@@ -451,6 +452,7 @@ function setChartData(symbol, bars) {
   selectedDrawing = null;
   dragState = null;
   stopReplay();
+  stopChartLive(); // freshly-fetched bars invalidate the in-progress live bar's position
   chartState = { symbol, bars, view: { start: 0, end: bars.length } };
   renderChart();
 }
@@ -483,6 +485,7 @@ function armReplaySelection() {
     document.querySelector("#message").textContent = "Load a chart before starting a replay.";
     return;
   }
+  stopChartLive();
   pauseReplay();
   awaitingReplayStart = true;
   document.querySelector("#candlestick-chart").classList.add("replay-arming");
@@ -2256,6 +2259,7 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
         alpaca_api_key: form.alpaca_api_key.value,
         alpaca_secret_key: form.alpaca_secret_key.value,
         fmp_api_key: form.fmp_api_key.value,
+        finnhub_api_key: form.finnhub_api_key.value,
         ntfy_topic: form.ntfy_topic.value,
         alpaca_paper: form.alpaca_paper.checked,
         allow_live_trading: form.allow_live_trading.checked,
@@ -2265,6 +2269,7 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
     form.alpaca_api_key.value = settings.alpaca_api_key;
     form.alpaca_secret_key.value = settings.alpaca_secret_key;
     form.fmp_api_key.value = settings.fmp_api_key;
+    form.finnhub_api_key.value = settings.finnhub_api_key;
     document.querySelector("#message").textContent = "Settings saved";
     await checkApiKeysConfigured();
   } catch (error) {
@@ -2494,6 +2499,90 @@ document.querySelector("#clear-drawings").addEventListener("click", () => {
   selectedDrawing = null;
   renderChart();
 });
+
+// Live overlay: streams real-time Finnhub trade ticks for the current symbol over
+// a websocket and builds genuine 1-second candles at the right edge of the chart,
+// on top of whatever historical bars (1-minute or coarser) are already loaded.
+// Purely a "watch it happening" overlay - nothing here feeds TradingBot/MarketScanner,
+// which still trade off Alpaca's own data exactly as before.
+let liveSocket = null;
+let liveBar = null; // the in-progress 1-second bar currently being built from ticks
+
+function setLiveStatus(text, isError = false) {
+  const el = document.querySelector("#live-status");
+  el.textContent = text;
+  el.hidden = !text;
+  el.classList.toggle("error", isError);
+}
+
+function stopChartLive(keepStatus = false) {
+  if (liveSocket) {
+    liveSocket.onclose = null; // this is a deliberate stop, not a dropped connection
+    liveSocket.close();
+    liveSocket = null;
+  }
+  liveBar = null;
+  document.querySelector("#toggle-chart-live").classList.remove("active");
+  if (!keepStatus) setLiveStatus("");
+}
+
+function applyLiveTick(tick) {
+  if (!chartState) return;
+  const bucketIso = new Date(Math.floor(tick.timestamp / 1000) * 1000).toISOString();
+  const wasAtEnd = chartState.view.end >= chartState.bars.length;
+  if (liveBar && liveBar.timestamp === bucketIso) {
+    liveBar.high = Math.max(liveBar.high, tick.price);
+    liveBar.low = Math.min(liveBar.low, tick.price);
+    liveBar.close = tick.price;
+    liveBar.volume += tick.volume || 0;
+  } else {
+    liveBar = { timestamp: bucketIso, open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: tick.volume || 0 };
+    chartState.bars.push(liveBar);
+  }
+  if (wasAtEnd) chartState.view.end = chartState.bars.length;
+  renderChart();
+}
+
+function startChartLive() {
+  if (!chartState) {
+    document.querySelector("#message").textContent = "Load a chart before going live.";
+    return;
+  }
+  if (document.querySelector("#chart-date").value) {
+    document.querySelector("#message").textContent = "Live data only applies to the current session — clear the date picker first.";
+    return;
+  }
+  const symbol = chartState.symbol;
+  const protocol = location.protocol === "https:" ? "wss://" : "ws://";
+  liveBar = null;
+  liveSocket = new WebSocket(`${protocol}${location.host}/ws/live/${encodeURIComponent(symbol)}`);
+  document.querySelector("#toggle-chart-live").classList.add("active");
+  setLiveStatus(`Connecting live feed for ${symbol}...`);
+
+  liveSocket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.error) {
+      setLiveStatus(data.error, true);
+      stopChartLive(true);
+      return;
+    }
+    setLiveStatus(`Live: ${symbol} — last tick ${new Date(data.timestamp).toLocaleTimeString()}`);
+    applyLiveTick(data);
+  };
+  liveSocket.onclose = () => {
+    if (liveSocket) {
+      setLiveStatus("Live connection lost.", true);
+      stopChartLive(true);
+    }
+  };
+}
+
+function toggleChartLive() {
+  if (liveSocket) stopChartLive();
+  else startChartLive();
+}
+
+document.querySelector("#toggle-chart-live").addEventListener("click", toggleChartLive);
 
 function resizeCandlestickCanvas() {
   const canvas = document.querySelector("#candlestick-chart");
