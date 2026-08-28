@@ -1769,13 +1769,38 @@ function showChartTooltip(event) {
   const bar = visibleBars[index];
   const candleX = padding.left + index * candleStep + candleStep / 2;
   renderChart();
+  const hoverPrice = dataPointFromCanvasXY(x, y).price;
 
   const ctx = canvas.getContext("2d");
+  ctx.save();
   ctx.strokeStyle = "rgba(238, 246, 251, 0.38)";
+  ctx.setLineDash([4, 4]);
+
+  // Vertical crosshair - snapped to the hovered candle, same as the tooltip.
   ctx.beginPath();
   ctx.moveTo(candleX, padding.top);
   ctx.lineTo(candleX, padding.top + chartHeight);
   ctx.stroke();
+
+  // Horizontal crosshair - follows the cursor's exact y, not snapped to a bar,
+  // so it reads off whatever price is directly under the pointer.
+  ctx.beginPath();
+  ctx.moveTo(padding.left, y);
+  ctx.lineTo(padding.left + chartWidth, y);
+  ctx.stroke();
+  ctx.restore();
+
+  // Price tag on the right axis where the horizontal line meets it.
+  const priceLabel = `$${hoverPrice.toFixed(2)}`;
+  ctx.font = "12px Segoe UI, sans-serif";
+  const labelWidth = ctx.measureText(priceLabel).width + 12;
+  const labelY = Math.min(padding.top + chartHeight - 8, Math.max(padding.top + 8, y));
+  ctx.fillStyle = "#eef6fb";
+  ctx.fillRect(padding.left + chartWidth, labelY - 9, labelWidth, 18);
+  ctx.fillStyle = "#04140c";
+  ctx.textAlign = "left";
+  ctx.fillText(priceLabel, padding.left + chartWidth + 6, labelY + 4);
+  ctx.textAlign = "start";
 
   tooltip.hidden = false;
   tooltip.innerHTML = `
