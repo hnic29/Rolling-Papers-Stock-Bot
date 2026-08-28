@@ -1063,6 +1063,37 @@ form {
   padding: 6px 8px;
 }
 
+.drawing-context-menu {
+  background: #0b141d;
+  border: 1px solid rgba(190, 213, 230, 0.16);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  min-width: 170px;
+  padding: 6px;
+  position: fixed;
+  z-index: 45;
+}
+
+.drawing-context-menu[hidden] {
+  display: none;
+}
+
+.drawing-context-menu-color-row {
+  align-items: center;
+  color: #a8b9c8;
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.drawing-context-menu-color-row input[type="color"] {
+  height: 24px;
+  min-height: auto;
+  padding: 0;
+  width: 40px;
+}
+
 .chart-body {
   display: flex;
   gap: 10px;
@@ -1371,7 +1402,7 @@ form {
 }
 
 #candlestick-chart.dragging {
-  cursor: move;
+  cursor: grabbing;
 }
 
 /* #performance-chart and #backtest-chart draw at a fixed 1040px-wide internal buffer
@@ -1397,6 +1428,15 @@ form {
 
 #candlestick-chart.erasing {
   cursor: not-allowed;
+}
+
+/* Hovering a selected drawing's handle or body - shown regardless of which
+   drawing tool is active (not just Cursor), signaling it's grabbable even
+   while the active tool's own crosshair cursor (.drawing above) would
+   otherwise apply. Declared after .drawing/.erasing so it wins the cursor tie
+   when both would otherwise apply (equal specificity - source order decides). */
+#candlestick-chart.hover-draggable {
+  cursor: grab;
 }
 
 .chart-tooltip[hidden] {

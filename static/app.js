@@ -577,6 +577,19 @@ function positionFloatingPanel(panel, anchor) {
   panel.style.left = `${left}px`;
 }
 
+// Same idea as positionFloatingPanel, anchored to a raw point instead of an
+// element - for the drawing right-click menu, which opens wherever the click
+// happened rather than below a fixed toggle button.
+function positionFloatingPanelAtPoint(panel, clientX, clientY) {
+  document.body.appendChild(panel);
+  panel.hidden = false;
+  const panelRect = panel.getBoundingClientRect();
+  const top = Math.max(8, Math.min(clientY, window.innerHeight - panelRect.height - 8));
+  const left = Math.max(8, Math.min(clientX, window.innerWidth - panelRect.width - 8));
+  panel.style.top = `${top}px`;
+  panel.style.left = `${left}px`;
+}
+
 const INDICATOR_PICKER_ITEMS = [
   { type: "sma", label: "SMA - Simple Moving Average" },
   { type: "ema", label: "EMA - Exponential Moving Average" },
@@ -1585,12 +1598,72 @@ function setSelectedDrawing(drawing) {
   // drawing's own color while one is selected, otherwise the color the next
   // new drawing will get.
   document.querySelector("#draw-color").value = drawing ? drawingColor(drawing) : activeDrawColor;
+  if (!drawing) document.querySelector("#candlestick-chart").classList.remove("hover-draggable");
   if (chartState) renderChart();
 }
 
 function handleIndexAtCanvasXY(drawing, x, y) {
   if (!drawing) return -1;
   return drawing.points.findIndex((p) => Math.hypot(x - xForPoint(p), y - yForPrice(p.price)) <= HANDLE_HIT_RADIUS);
+}
+
+// Shows a "grab" cursor while hovering a selected, unlocked drawing's handle or
+// body - even while a drawing tool other than Cursor is active, since entry #61
+// made selecting/editing work regardless of the active tool.
+function updateDrawingHoverCursor(event) {
+  const canvas = document.querySelector("#candlestick-chart");
+  if (!selectedDrawing || selectedDrawing.locked || !chartState || !chartState.padding) {
+    canvas.classList.remove("hover-draggable");
+    return;
+  }
+  const { x, y } = eventToCanvasXY(event);
+  const grabbable = handleIndexAtCanvasXY(selectedDrawing, x, y) !== -1 || hitTestDrawing(selectedDrawing, x, y, 8);
+  canvas.classList.toggle("hover-draggable", grabbable);
+}
+
+// Right-click menu for an existing drawing - adapted from TradingView's own
+// (Add alert / Template / Visual order / Clone / Lock / Hide / Remove /
+// Settings...), scoped down to what this app actually has a way to do: a
+// color swatch (explicitly requested), Lock/Unlock, and Remove. The rest of
+// TradingView's menu (alerts, clone, an object tree, per-interval visibility)
+// has no backing feature here, so it's left out rather than faked.
+function renderDrawingContextMenuContent(drawing) {
+  const menu = document.querySelector("#drawing-context-menu");
+  menu.innerHTML = `
+    <div class="drawing-context-menu-color-row">
+      <span>Color</span>
+      <input type="color" id="drawing-context-color" value="${drawingColor(drawing)}" />
+    </div>
+    <button type="button" class="interval-menu-item" id="drawing-context-lock">${drawing.locked ? "Unlock" : "Lock"}</button>
+    <button type="button" class="interval-menu-item" id="drawing-context-remove">Remove</button>
+  `;
+  document.querySelector("#drawing-context-color").addEventListener("input", (event) => {
+    drawing.color = event.target.value;
+    document.querySelector("#draw-color").value = event.target.value;
+    renderChart();
+  });
+  document.querySelector("#drawing-context-lock").addEventListener("click", () => {
+    drawing.locked = !drawing.locked;
+    closeDrawingContextMenu();
+    if (chartState) renderChart();
+  });
+  document.querySelector("#drawing-context-remove").addEventListener("click", () => {
+    const list = currentDrawings();
+    const index = list.indexOf(drawing);
+    if (index !== -1) list.splice(index, 1);
+    if (selectedDrawing === drawing) setSelectedDrawing(null);
+    closeDrawingContextMenu();
+    if (chartState) renderChart();
+  });
+}
+
+function openDrawingContextMenu(drawing, clientX, clientY) {
+  renderDrawingContextMenuContent(drawing);
+  positionFloatingPanelAtPoint(document.querySelector("#drawing-context-menu"), clientX, clientY);
+}
+
+function closeDrawingContextMenu() {
+  document.querySelector("#drawing-context-menu").hidden = true;
 }
 
 const DRAWING_POINTS_REQUIRED = {
@@ -2509,6 +2582,7 @@ function zoomChart(event) {
 let panState = null;
 
 function startPan(event) {
+  if (event.button !== 0) return; // right/middle click - handled by the contextmenu listener instead, not a drag/pan
   if (!chartState || !chartState.bars.length || !chartState.padding) return;
   const { x, y } = eventToCanvasXY(event);
 
@@ -2520,7 +2594,7 @@ function startPan(event) {
   // (pan for Cursor, or - via handleChartClick - place a new point). Skipped
   // entirely while a multi-point drawing is half-placed (pendingDrawing) - every
   // click in that state must go toward finishing it, not selecting something else.
-  if (!pendingDrawing && selectedDrawing) {
+  if (!pendingDrawing && selectedDrawing && !selectedDrawing.locked) {
     const pointIndex = handleIndexAtCanvasXY(selectedDrawing, x, y);
     if (pointIndex !== -1) {
       dragState = { mode: "point", drawing: selectedDrawing, pointIndex };
@@ -3413,6 +3487,7 @@ candlestickChart.addEventListener("mousemove", (event) => {
     renderChart();
     return;
   }
+  updateDrawingHoverCursor(event);
   showChartTooltip(event);
 });
 candlestickChart.addEventListener("mouseup", () => {
@@ -3423,6 +3498,20 @@ candlestickChart.addEventListener("mouseleave", () => {
   endDrag();
   endPan();
   hideChartTooltip();
+  candlestickChart.classList.remove("hover-draggable");
+});
+candlestickChart.addEventListener("contextmenu", (event) => {
+  if (!chartState || !chartState.padding) return;
+  const { x, y } = eventToCanvasXY(event);
+  const hit = currentDrawings().find((d) => hitTestDrawing(d, x, y, 8));
+  if (!hit) return; // nothing under the cursor - let the browser's own menu show
+  event.preventDefault();
+  setSelectedDrawing(hit);
+  openDrawingContextMenu(hit, event.clientX, event.clientY);
+});
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector("#drawing-context-menu");
+  if (!menu.hidden && !menu.contains(event.target)) closeDrawingContextMenu();
 });
 candlestickChart.addEventListener("click", handleChartClick);
 candlestickChart.addEventListener("dblclick", () => {
@@ -3634,6 +3723,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !document.querySelector("#indicator-menu").hidden) closeIndicatorMenu();
   if (event.key === "Escape" && !document.querySelector("#indicator-settings-popover").hidden) closeIndicatorSettingsPopover();
   if (event.key === "Escape" && !document.querySelector("#replay-start-menu").hidden) closeReplayStartMenu();
+  if (event.key === "Escape" && !document.querySelector("#drawing-context-menu").hidden) closeDrawingContextMenu();
   if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
     toggleChartExpanded();
   }
