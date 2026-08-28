@@ -2685,12 +2685,16 @@ function endPan() {
   document.querySelector("#candlestick-chart").classList.remove("panning");
 }
 
-function showChartTooltip(event) {
+// Dotted crosshair (vertical snapped to the hovered candle, horizontal follows
+// the cursor's exact y) with a price tag on the axis. Used to also pop up an
+// OHLCV tooltip box here too, but that's gone now - it was redundant with the
+// price tag and kept overlapping the newer drawing-selection popovers (color
+// picker, right-click menu) that can appear in the same area.
+function renderChartCrosshair(event) {
   if (panState) return;
   if (!chartState || !chartState.padding || !chartState.visibleBars || !chartState.visibleBars.length) return;
 
   const canvas = document.querySelector("#candlestick-chart");
-  const tooltip = document.querySelector("#chart-tooltip");
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
@@ -2699,13 +2703,11 @@ function showChartTooltip(event) {
   const { padding, chartWidth, chartHeight, candleStep, visibleBars } = chartState;
 
   if (x < padding.left || x > padding.left + chartWidth || y < padding.top || y > padding.top + chartHeight) {
-    tooltip.hidden = true;
     renderChart();
     return;
   }
 
   const index = Math.max(0, Math.min(visibleBars.length - 1, Math.floor((x - padding.left) / candleStep)));
-  const bar = visibleBars[index];
   const candleX = padding.left + index * candleStep + candleStep / 2;
   renderChart();
   const hoverPrice = dataPointFromCanvasXY(x, y).price;
@@ -2715,7 +2717,7 @@ function showChartTooltip(event) {
   ctx.strokeStyle = "rgba(238, 246, 251, 0.38)";
   ctx.setLineDash([4, 4]);
 
-  // Vertical crosshair - snapped to the hovered candle, same as the tooltip.
+  // Vertical crosshair - snapped to the hovered candle.
   ctx.beginPath();
   ctx.moveTo(candleX, padding.top);
   ctx.lineTo(candleX, padding.top + chartHeight);
@@ -2740,27 +2742,9 @@ function showChartTooltip(event) {
   ctx.textAlign = "left";
   ctx.fillText(priceLabel, padding.left + chartWidth + 6, labelY + 4);
   ctx.textAlign = "start";
-
-  tooltip.hidden = false;
-  tooltip.innerHTML = `
-    <strong>${escapeHtml(chartState.symbol)}</strong>
-    <span>${new Date(bar.timestamp).toLocaleString()}</span>
-    <span>O $${Number(bar.open).toFixed(4)}</span>
-    <span>H $${Number(bar.high).toFixed(4)}</span>
-    <span>L $${Number(bar.low).toFixed(4)}</span>
-    <span>C $${Number(bar.close).toFixed(4)}</span>
-    <span>Vol ${Number(bar.volume).toLocaleString()}</span>
-  `;
-
-  const left = Math.min(rect.width - 168, Math.max(8, event.clientX - rect.left + 14));
-  const top = Math.min(rect.height - 152, Math.max(8, event.clientY - rect.top + 14));
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
 }
 
-function hideChartTooltip() {
-  const tooltip = document.querySelector("#chart-tooltip");
-  tooltip.hidden = true;
+function clearChartCrosshair() {
   if (chartState) renderChart();
 }
 
@@ -3488,7 +3472,7 @@ candlestickChart.addEventListener("mousemove", (event) => {
     return;
   }
   updateDrawingHoverCursor(event);
-  showChartTooltip(event);
+  renderChartCrosshair(event);
 });
 candlestickChart.addEventListener("mouseup", () => {
   endDrag();
@@ -3497,7 +3481,7 @@ candlestickChart.addEventListener("mouseup", () => {
 candlestickChart.addEventListener("mouseleave", () => {
   endDrag();
   endPan();
-  hideChartTooltip();
+  clearChartCrosshair();
   candlestickChart.classList.remove("hover-draggable");
 });
 candlestickChart.addEventListener("contextmenu", (event) => {

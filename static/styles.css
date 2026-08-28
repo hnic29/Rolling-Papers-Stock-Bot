@@ -1439,36 +1439,6 @@ form {
   cursor: grab;
 }
 
-.chart-tooltip[hidden] {
-  display: none;
-}
-
-.chart-tooltip {
-  background: rgba(3, 8, 14, 0.94);
-  border: 1px solid rgba(190, 213, 230, 0.24);
-  border-radius: 6px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  color: #eef6fb;
-  display: grid;
-  font-size: 12px;
-  gap: 4px;
-  left: 0;
-  min-width: 150px;
-  padding: 10px;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  z-index: 2;
-}
-
-.chart-tooltip strong {
-  font-size: 13px;
-}
-
-.chart-tooltip span {
-  color: #b8c7d4;
-}
-
 .table-wrap {
   overflow-x: auto;
 }
