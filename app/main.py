@@ -98,8 +98,16 @@ app.add_middleware(SessionAuthMiddleware)
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 MAX_BARS_LIMIT = 5000
 
-# Longer-range chart presets: (bar timeframe, lookback in calendar days). YTD is handled separately.
+# Chart interval presets: (bar timeframe, lookback in calendar days). YTD is handled
+# separately. The intraday entries (5MIN..4HOUR) back the chart's Minutes/Hours
+# dropdown groups - each lookback is picked so the range holds a few hundred bars at
+# that granularity, not so long the request turns into thousands of candles.
 RANGE_PRESETS: dict[str, tuple[TimeFrame, int]] = {
+    "5MIN": (TimeFrame(5, TimeFrameUnit.Minute), 5),
+    "15MIN": (TimeFrame(15, TimeFrameUnit.Minute), 15),
+    "30MIN": (TimeFrame(30, TimeFrameUnit.Minute), 30),
+    "1HOUR": (TimeFrame(1, TimeFrameUnit.Hour), 90),
+    "4HOUR": (TimeFrame(4, TimeFrameUnit.Hour), 365),
     "1M": (TimeFrame.Day, 45),
     "6M": (TimeFrame.Day, 200),
     "1Y": (TimeFrame.Day, 400),

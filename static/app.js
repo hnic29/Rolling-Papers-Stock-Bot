@@ -418,14 +418,28 @@ async function refreshChart(symbol = getManualSymbol()) {
 }
 
 // Every selectable chart interval, in one place - drives both the 3 "quick" buttons
-// and the categorized dropdown. TradingView's own interval picker groups by
-// Ticks/Seconds/Minutes/Hours/Days/Ranges; this app only ever fetches minute/day/
-// week/month bars (see RANGE_PRESETS in main.py), so those groups don't apply -
-// grouped instead by Intraday/Months/Years, the granularities this data actually has.
+// and the categorized dropdown. Grouped like TradingView's own interval picker
+// (Ticks/Seconds/Minutes/Hours/Days), adapted to what this app can actually back
+// with real data: Minutes/Hours/Days/Months/Years come from Alpaca's historical
+// bars (see RANGE_PRESETS in main.py); Seconds/Ticks have no historical source
+// anywhere (Alpaca's bars API stops at 1-minute) so those are `live: true` -
+// picking one starts/reconfigures the Finnhub Live overlay (see startChartLive)
+// instead of fetching /api/bars, bucketing real trade ticks by time window or by
+// a fixed trade count rather than by calendar time.
 const INTERVAL_DEFS = [
-  { key: "1D", label: "1 Day", shortLabel: "1D", days: 1, group: "Intraday" },
-  { key: "5D", label: "5 Days", shortLabel: "5D", days: 5, group: "Intraday" },
-  { key: "10D", label: "10 Days", shortLabel: "10D", days: 10, group: "Intraday" },
+  { key: "1S", label: "1 Second", shortLabel: "1s", group: "Seconds", live: true, bucketMode: "time", bucketMs: 1000 },
+  { key: "5S", label: "5 Seconds", shortLabel: "5s", group: "Seconds", live: true, bucketMode: "time", bucketMs: 5000 },
+  { key: "10S", label: "10 Seconds", shortLabel: "10s", group: "Seconds", live: true, bucketMode: "time", bucketMs: 10000 },
+  { key: "10T", label: "10 Ticks", shortLabel: "10t", group: "Ticks", live: true, bucketMode: "ticks", bucketCount: 10 },
+  { key: "100T", label: "100 Ticks", shortLabel: "100t", group: "Ticks", live: true, bucketMode: "ticks", bucketCount: 100 },
+  { key: "5MIN", label: "5 Minutes", shortLabel: "5m", period: "5Min", group: "Minutes" },
+  { key: "15MIN", label: "15 Minutes", shortLabel: "15m", period: "15Min", group: "Minutes" },
+  { key: "30MIN", label: "30 Minutes", shortLabel: "30m", period: "30Min", group: "Minutes" },
+  { key: "1HOUR", label: "1 Hour", shortLabel: "1h", period: "1Hour", group: "Hours" },
+  { key: "4HOUR", label: "4 Hours", shortLabel: "4h", period: "4Hour", group: "Hours" },
+  { key: "1D", label: "1 Day", shortLabel: "1D", days: 1, group: "Days" },
+  { key: "5D", label: "5 Days", shortLabel: "5D", days: 5, group: "Days" },
+  { key: "10D", label: "10 Days", shortLabel: "10D", days: 10, group: "Days" },
   { key: "1M", label: "1 Month", shortLabel: "1M", period: "1M", group: "Months" },
   { key: "6M", label: "6 Months", shortLabel: "6M", period: "6M", group: "Months" },
   { key: "YTD", label: "Year to Date", shortLabel: "YTD", period: "YTD", group: "Months" },
@@ -492,9 +506,26 @@ function selectInterval(key) {
   const def = intervalDef(key);
   if (!def) return;
   activeIntervalKey = key;
-  chartRangeDays = def.days || chartRangeDays;
-  chartRangePeriod = def.period || null;
   document.querySelector("#chart-date").value = "";
+
+  if (def.live) {
+    // No historical source for Seconds/Ticks exists anywhere in this app - reset
+    // to an empty view and (re)start the live overlay at this bucket size rather
+    // than fetching /api/bars.
+    if (!chartState) {
+      document.querySelector("#message").textContent = "Load a chart before selecting a live interval.";
+    } else {
+      stopChartLive();
+      chartState.bars = [];
+      chartState.view = { start: 0, end: 0 };
+      renderChart(); // clears the old (now stale) candles immediately, before the first live tick arrives
+      startChartLive({ bucketMode: def.bucketMode, bucketMs: def.bucketMs, bucketCount: def.bucketCount });
+    }
+  } else {
+    chartRangeDays = def.days || chartRangeDays;
+    chartRangePeriod = def.period || null;
+    refreshChart().catch((error) => (document.querySelector("#message").textContent = error.message));
+  }
 
   if (recentIntervals.includes(key)) {
     document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {
@@ -509,8 +540,6 @@ function selectInterval(key) {
     renderQuickIntervalButtons();
   }
   renderIntervalMenu();
-
-  refreshChart().catch((error) => (document.querySelector("#message").textContent = error.message));
 }
 
 function openIntervalMenu() {
@@ -2702,12 +2731,21 @@ document.querySelector("#clear-drawings").addEventListener("click", () => {
 });
 
 // Live overlay: streams real-time Finnhub trade ticks for the current symbol over
-// a websocket and builds genuine 1-second candles at the right edge of the chart,
-// on top of whatever historical bars (1-minute or coarser) are already loaded.
-// Purely a "watch it happening" overlay - nothing here feeds TradingBot/MarketScanner,
-// which still trade off Alpaca's own data exactly as before.
+// a websocket and builds genuine candles at the right edge of the chart, on top of
+// whatever historical bars (1-minute or coarser) are already loaded. Purely a
+// "watch it happening" overlay - nothing here feeds TradingBot/MarketScanner, which
+// still trade off Alpaca's own data exactly as before.
+//
+// Bucketing is configurable two ways (see the Seconds/Ticks groups in
+// INTERVAL_DEFS, the only real source of sub-minute data anywhere in this app):
+// "time" buckets ticks into fixed windows (1s/5s/10s/...), "ticks" buckets a fixed
+// COUNT of trade prints into each bar regardless of how long that takes.
 let liveSocket = null;
-let liveBar = null; // the in-progress 1-second bar currently being built from ticks
+let liveBar = null; // the in-progress bar currently being built from ticks
+let liveBucketMode = "time";
+let liveBucketMs = 1000;
+let liveBucketCount = 100;
+let liveTickCounter = 0; // ticks folded into liveBar so far, only meaningful in "ticks" mode
 
 function setLiveStatus(text, isError = false) {
   const el = document.querySelector("#live-status");
@@ -2723,28 +2761,45 @@ function stopChartLive(keepStatus = false) {
     liveSocket = null;
   }
   liveBar = null;
+  liveTickCounter = 0;
   document.querySelector("#toggle-chart-live").classList.remove("active");
   if (!keepStatus) setLiveStatus("");
 }
 
 function applyLiveTick(tick) {
   if (!chartState) return;
-  const bucketIso = new Date(Math.floor(tick.timestamp / 1000) * 1000).toISOString();
   const wasAtEnd = chartState.view.end >= chartState.bars.length;
-  if (liveBar && liveBar.timestamp === bucketIso) {
-    liveBar.high = Math.max(liveBar.high, tick.price);
-    liveBar.low = Math.min(liveBar.low, tick.price);
-    liveBar.close = tick.price;
-    liveBar.volume += tick.volume || 0;
+
+  if (liveBucketMode === "ticks") {
+    if (liveBar && liveTickCounter < liveBucketCount) {
+      liveBar.high = Math.max(liveBar.high, tick.price);
+      liveBar.low = Math.min(liveBar.low, tick.price);
+      liveBar.close = tick.price;
+      liveBar.volume += tick.volume || 0;
+      liveTickCounter += 1;
+    } else {
+      liveBar = { timestamp: new Date(tick.timestamp).toISOString(), open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: tick.volume || 0 };
+      chartState.bars.push(liveBar);
+      liveTickCounter = 1;
+    }
   } else {
-    liveBar = { timestamp: bucketIso, open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: tick.volume || 0 };
-    chartState.bars.push(liveBar);
+    const bucketIso = new Date(Math.floor(tick.timestamp / liveBucketMs) * liveBucketMs).toISOString();
+    if (liveBar && liveBar.timestamp === bucketIso) {
+      liveBar.high = Math.max(liveBar.high, tick.price);
+      liveBar.low = Math.min(liveBar.low, tick.price);
+      liveBar.close = tick.price;
+      liveBar.volume += tick.volume || 0;
+    } else {
+      liveBar = { timestamp: bucketIso, open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: tick.volume || 0 };
+      chartState.bars.push(liveBar);
+    }
   }
+
   if (wasAtEnd) chartState.view.end = chartState.bars.length;
   renderChart();
 }
 
-function startChartLive() {
+function startChartLive({ bucketMode = "time", bucketMs = 1000, bucketCount = 100 } = {}) {
   if (!chartState) {
     document.querySelector("#message").textContent = "Load a chart before going live.";
     return;
@@ -2756,6 +2811,10 @@ function startChartLive() {
   const symbol = chartState.symbol;
   const protocol = location.protocol === "https:" ? "wss://" : "ws://";
   liveBar = null;
+  liveTickCounter = 0;
+  liveBucketMode = bucketMode;
+  liveBucketMs = bucketMs;
+  liveBucketCount = bucketCount;
   liveSocket = new WebSocket(`${protocol}${location.host}/ws/live/${encodeURIComponent(symbol)}`);
   document.querySelector("#toggle-chart-live").classList.add("active");
   setLiveStatus(`Connecting live feed for ${symbol}...`);
