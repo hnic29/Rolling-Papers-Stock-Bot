@@ -613,6 +613,30 @@ function closeIndicatorMenu() {
   document.querySelector("#indicator-menu").hidden = true;
 }
 
+function renderReplayStartMenu() {
+  document.querySelector("#replay-start-menu").innerHTML = `
+    <button type="button" class="interval-menu-item" id="replay-start-first-bar">Start from the first available bar</button>
+    <button type="button" class="interval-menu-item" id="replay-start-random-bar">Random bar</button>
+  `;
+  document.querySelector("#replay-start-first-bar").addEventListener("click", () => {
+    startReplayFromFirstBar();
+    closeReplayStartMenu();
+  });
+  document.querySelector("#replay-start-random-bar").addEventListener("click", () => {
+    startReplayFromRandomBar();
+    closeReplayStartMenu();
+  });
+}
+
+function openReplayStartMenu() {
+  renderReplayStartMenu();
+  positionFloatingPanel(document.querySelector("#replay-start-menu"), document.querySelector("#replay-start-menu-toggle"));
+}
+
+function closeReplayStartMenu() {
+  document.querySelector("#replay-start-menu").hidden = true;
+}
+
 function renderActiveIndicatorChips() {
   const container = document.querySelector("#indicator-chips");
   container.innerHTML = activeIndicators
@@ -764,6 +788,28 @@ function armReplaySelection() {
   document.querySelector("#chart-hint").textContent = "Click a candle to start the replay from there.";
 }
 
+// TradingView's own Bar Replay offers three ways to pick a starting point -
+// clicking a bar (armReplaySelection above), "Select the first available day",
+// and "Random bar" - these two cover the other two without needing a click.
+function startReplayFromFirstBar() {
+  if (!chartState || !chartState.bars.length) {
+    document.querySelector("#message").textContent = "Load a chart before starting a replay.";
+    return;
+  }
+  stopChartLive();
+  startReplay(MIN_VISIBLE_CANDLES);
+}
+
+function startReplayFromRandomBar() {
+  if (!chartState || !chartState.bars.length) {
+    document.querySelector("#message").textContent = "Load a chart before starting a replay.";
+    return;
+  }
+  stopChartLive();
+  const span = Math.max(1, chartState.bars.length - MIN_VISIBLE_CANDLES);
+  startReplay(MIN_VISIBLE_CANDLES + Math.floor(Math.random() * span));
+}
+
 function startReplay(startIndex) {
   awaitingReplayStart = false;
   document.querySelector("#candlestick-chart").classList.remove("replay-arming");
@@ -772,7 +818,8 @@ function startReplay(startIndex) {
   chartState.view.end = replayState.currentIndex;
   document.querySelector("#replay-toolbar").hidden = false;
   document.querySelector("#replay-play-pause").innerHTML = "&#9654;";
-  document.querySelector("#chart-hint").textContent = "Step or play through the chart. Exit Replay to see the full picture again.";
+  document.querySelector("#chart-hint").textContent =
+    "Step or play through the chart (Shift+←/→ to step, Shift+↓ to play/pause). Escape or Exit Replay to see the full picture again.";
   updateReplayPositionLabel();
   renderChart();
 }
@@ -3544,6 +3591,13 @@ document.querySelector("#replay-speed").addEventListener("change", () => {
   }
 });
 
+// Guards the replay hotkeys below from hijacking normal typing - e.g. typing
+// "r" into the Symbol field shouldn't arm a replay.
+function isTypingInFormField(event) {
+  const tag = event.target.tagName;
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || event.target.isContentEditable;
+}
+
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingDrawing) cancelPendingDrawing();
   if (event.key === "Escape" && awaitingReplayStart) stopReplay();
@@ -3552,8 +3606,29 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !document.querySelector("#interval-menu").hidden) closeIntervalMenu();
   if (event.key === "Escape" && !document.querySelector("#indicator-menu").hidden) closeIndicatorMenu();
   if (event.key === "Escape" && !document.querySelector("#indicator-settings-popover").hidden) closeIndicatorSettingsPopover();
+  if (event.key === "Escape" && !document.querySelector("#replay-start-menu").hidden) closeReplayStartMenu();
   if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
     toggleChartExpanded();
+  }
+
+  // Same hotkeys TradingView's own Bar Replay uses: "R" arms/re-arms replay
+  // (click a candle next), Shift+Down plays/pauses, Shift+Right/Left step.
+  if (isTypingInFormField(event)) return;
+  if (event.key.toLowerCase() === "r" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    armReplaySelection();
+  }
+  if (event.shiftKey && replayState) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      toggleReplayPlay();
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepReplay(1);
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepReplay(-1);
+    }
   }
 });
 
@@ -3584,6 +3659,17 @@ document.addEventListener("click", (event) => {
   if (!popover.hidden && !popover.contains(event.target) && !event.target.closest(".indicator-chip-gear")) {
     closeIndicatorSettingsPopover();
   }
+});
+
+document.querySelector("#replay-start-menu-toggle").addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (document.querySelector("#replay-start-menu").hidden) openReplayStartMenu();
+  else closeReplayStartMenu();
+});
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector("#replay-start-menu");
+  const toggle = document.querySelector("#replay-start-menu-toggle");
+  if (!menu.hidden && !menu.contains(event.target) && event.target !== toggle) closeReplayStartMenu();
 });
 
 document.querySelector("#chart-date").addEventListener("change", async () => {

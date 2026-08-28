@@ -161,7 +161,11 @@
               <label>Date <input id="chart-date" type="date" /></label>
               <button id="refresh-chart" type="button">Refresh Chart</button>
               <button id="reset-zoom" type="button">Reset Zoom</button>
-              <button id="start-replay" type="button" title="Step through this chart bar by bar to practice reading price action">Replay</button>
+              <div class="indicator-picker">
+                <button id="start-replay" type="button" title="Click a candle to start the replay from there. Press R anytime to arm it.">Replay</button>
+                <button type="button" id="replay-start-menu-toggle" title="More ways to start a replay">&#9662;</button>
+                <div class="interval-menu" id="replay-start-menu" hidden></div>
+              </div>
               <button id="toggle-chart-live" type="button" title="Stream real-time, second-by-second price ticks onto the chart (requires a Finnhub API key in Settings)">
                 <span class="live-dot" aria-hidden="true"></span>Live
               </button>
