@@ -417,13 +417,122 @@ async function refreshChart(symbol = getManualSymbol()) {
   setChartData(response.symbol, response.bars);
 }
 
-function setChartRange(button) {
-  chartRangeDays = button.dataset.days ? Number(button.dataset.days) : chartRangeDays;
-  chartRangePeriod = button.dataset.period || null;
-  document.querySelector("#chart-date").value = "";
-  document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn === button);
+// Every selectable chart interval, in one place - drives both the 3 "quick" buttons
+// and the categorized dropdown. TradingView's own interval picker groups by
+// Ticks/Seconds/Minutes/Hours/Days/Ranges; this app only ever fetches minute/day/
+// week/month bars (see RANGE_PRESETS in main.py), so those groups don't apply -
+// grouped instead by Intraday/Months/Years, the granularities this data actually has.
+const INTERVAL_DEFS = [
+  { key: "1D", label: "1 Day", shortLabel: "1D", days: 1, group: "Intraday" },
+  { key: "5D", label: "5 Days", shortLabel: "5D", days: 5, group: "Intraday" },
+  { key: "10D", label: "10 Days", shortLabel: "10D", days: 10, group: "Intraday" },
+  { key: "1M", label: "1 Month", shortLabel: "1M", period: "1M", group: "Months" },
+  { key: "6M", label: "6 Months", shortLabel: "6M", period: "6M", group: "Months" },
+  { key: "YTD", label: "Year to Date", shortLabel: "YTD", period: "YTD", group: "Months" },
+  { key: "1Y", label: "1 Year", shortLabel: "1Y", period: "1Y", group: "Years" },
+  { key: "5Y", label: "5 Years", shortLabel: "5Y", period: "5Y", group: "Years" },
+  { key: "10Y", label: "10 Years", shortLabel: "10Y", period: "10Y", group: "Years" },
+  { key: "ALL", label: "All Time", shortLabel: "All", period: "ALL", group: "Years" },
+];
+const RECENT_INTERVALS_KEY = "rp-bot-recent-intervals";
+const DEFAULT_RECENT_INTERVALS = ["1D", "5D", "1M"];
+
+function intervalDef(key) {
+  return INTERVAL_DEFS.find((def) => def.key === key);
+}
+
+function loadRecentIntervals() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(RECENT_INTERVALS_KEY));
+    const valid = Array.isArray(stored) ? stored.filter((key) => intervalDef(key)) : [];
+    if (valid.length) return valid.slice(0, 3);
+  } catch {
+    /* corrupt/old localStorage value - fall through to the default */
+  }
+  return [...DEFAULT_RECENT_INTERVALS];
+}
+
+let recentIntervals = loadRecentIntervals();
+let activeIntervalKey = recentIntervals[0];
+
+function saveRecentIntervals() {
+  localStorage.setItem(RECENT_INTERVALS_KEY, JSON.stringify(recentIntervals));
+}
+
+function renderQuickIntervalButtons() {
+  const container = document.querySelector("#range-buttons");
+  container.innerHTML = recentIntervals
+    .map((key) => `<button type="button" class="range-btn${key === activeIntervalKey ? " active" : ""}" data-interval="${key}">${intervalDef(key).shortLabel}</button>`)
+    .join("");
+  container.querySelectorAll(".range-btn").forEach((btn) => {
+    btn.addEventListener("click", () => selectInterval(btn.dataset.interval));
   });
+}
+
+function renderIntervalMenu() {
+  const menu = document.querySelector("#interval-menu");
+  const groups = [...new Set(INTERVAL_DEFS.map((def) => def.group))];
+  menu.innerHTML = groups
+    .map((group) => `
+      <div class="interval-menu-group-label">${escapeHtml(group)}</div>
+      ${INTERVAL_DEFS.filter((def) => def.group === group)
+        .map((def) => `<button type="button" class="interval-menu-item${def.key === activeIntervalKey ? " active" : ""}" data-interval="${def.key}">${escapeHtml(def.label)}</button>`)
+        .join("")}
+    `)
+    .join("");
+  menu.querySelectorAll(".interval-menu-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectInterval(btn.dataset.interval);
+      closeIntervalMenu();
+    });
+  });
+}
+
+function selectInterval(key) {
+  const def = intervalDef(key);
+  if (!def) return;
+  activeIntervalKey = key;
+  chartRangeDays = def.days || chartRangeDays;
+  chartRangePeriod = def.period || null;
+  document.querySelector("#chart-date").value = "";
+
+  if (recentIntervals.includes(key)) {
+    document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.interval === key);
+    });
+  } else {
+    // Only reshuffles the visible 3 when a genuinely new interval is picked from
+    // the dropdown - clicking an already-visible quick button shouldn't make the
+    // row jump around under the cursor.
+    recentIntervals = [key, ...recentIntervals].slice(0, 3);
+    saveRecentIntervals();
+    renderQuickIntervalButtons();
+  }
+  renderIntervalMenu();
+
+  refreshChart().catch((error) => (document.querySelector("#message").textContent = error.message));
+}
+
+function openIntervalMenu() {
+  const menu = document.querySelector("#interval-menu");
+  const toggle = document.querySelector("#interval-menu-toggle");
+  // .panel uses backdrop-filter, which (like filter/transform) makes Chromium treat
+  // it as the containing block for any position:fixed descendant - the menu would
+  // position itself relative to the chart panel instead of the viewport otherwise.
+  // Reparenting to <body> sidesteps that entirely.
+  document.body.appendChild(menu);
+  renderIntervalMenu();
+  menu.hidden = false;
+  const toggleRect = toggle.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const top = Math.max(8, Math.min(toggleRect.bottom + 4, window.innerHeight - menuRect.height - 8));
+  const left = Math.max(8, Math.min(toggleRect.left, window.innerWidth - menuRect.width - 8));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
+
+function closeIntervalMenu() {
+  document.querySelector("#interval-menu").hidden = true;
 }
 
 let chartState = null;
@@ -2728,24 +2837,28 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && awaitingReplayStart) stopReplay();
   if (event.key === "Escape" && replayState) exitReplay();
   if (event.key === "Escape" && selectedDrawing) setSelectedDrawing(null);
+  if (event.key === "Escape" && !document.querySelector("#interval-menu").hidden) closeIntervalMenu();
   if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
     toggleChartExpanded();
   }
 });
 
-document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    setChartRange(btn);
-    try {
-      await refreshChart();
-    } catch (error) {
-      document.querySelector("#message").textContent = error.message;
-    }
-  });
+renderQuickIntervalButtons();
+document.querySelector("#interval-menu-toggle").addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (document.querySelector("#interval-menu").hidden) openIntervalMenu();
+  else closeIntervalMenu();
+});
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector("#interval-menu");
+  const toggle = document.querySelector("#interval-menu-toggle");
+  if (!menu.hidden && !menu.contains(event.target) && event.target !== toggle) closeIntervalMenu();
 });
 
 document.querySelector("#chart-date").addEventListener("change", async () => {
+  activeIntervalKey = null;
   document.querySelectorAll("#range-buttons .range-btn").forEach((btn) => btn.classList.remove("active"));
+  renderIntervalMenu();
   try {
     await refreshChart();
   } catch (error) {

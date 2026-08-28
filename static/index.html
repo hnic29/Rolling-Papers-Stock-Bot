@@ -153,17 +153,10 @@
           <div class="chart-header">
             <h2>Candlestick Chart</h2>
             <div class="chart-controls">
-              <div class="range-buttons" id="range-buttons">
-                <button type="button" class="range-btn active" data-days="1">1D</button>
-                <button type="button" class="range-btn" data-days="5">5D</button>
-                <button type="button" class="range-btn" data-days="10">10D</button>
-                <button type="button" class="range-btn" data-period="1M">1M</button>
-                <button type="button" class="range-btn" data-period="6M">6M</button>
-                <button type="button" class="range-btn" data-period="YTD">YTD</button>
-                <button type="button" class="range-btn" data-period="1Y">1Y</button>
-                <button type="button" class="range-btn" data-period="5Y">5Y</button>
-                <button type="button" class="range-btn" data-period="10Y">10Y</button>
-                <button type="button" class="range-btn" data-period="ALL">All</button>
+              <div class="interval-picker">
+                <div class="range-buttons" id="range-buttons"></div>
+                <button type="button" id="interval-menu-toggle" class="range-btn interval-menu-toggle" title="More intervals">More &#9662;</button>
+                <div class="interval-menu" id="interval-menu" hidden></div>
               </div>
               <label>Date <input id="chart-date" type="date" /></label>
               <button id="refresh-chart" type="button">Refresh Chart</button>
