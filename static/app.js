@@ -577,13 +577,24 @@ function positionFloatingPanel(panel, anchor) {
   panel.style.left = `${left}px`;
 }
 
+const INDICATOR_PICKER_ITEMS = [
+  { type: "sma", label: "SMA - Simple Moving Average" },
+  { type: "ema", label: "EMA - Exponential Moving Average" },
+  { type: "bb", label: "Bollinger Bands" },
+  { type: "rsi", label: "RSI - Relative Strength Index" },
+  { type: "macd", label: "MACD" },
+];
+
 function renderIndicatorMenu() {
   const menu = document.querySelector("#indicator-menu");
+  const overlays = INDICATOR_PICKER_ITEMS.filter((item) => INDICATOR_TYPE_DEFS[item.type].panelGroup === "overlay");
+  const others = INDICATOR_PICKER_ITEMS.filter((item) => INDICATOR_TYPE_DEFS[item.type].panelGroup !== "overlay");
+  const itemHtml = (item) => `<button type="button" class="interval-menu-item" data-add-indicator="${item.type}">${escapeHtml(item.label)}</button>`;
   menu.innerHTML = `
     <div class="interval-menu-group-label">Overlays (plot on price)</div>
-    <button type="button" class="interval-menu-item" data-add-indicator="ema">EMA - Exponential Moving Average</button>
+    ${overlays.map(itemHtml).join("")}
     <div class="interval-menu-group-label">Oscillators (own panel)</div>
-    <button type="button" class="interval-menu-item" data-add-indicator="rsi">RSI - Relative Strength Index</button>
+    ${others.map(itemHtml).join("")}
   `;
   menu.querySelectorAll("[data-add-indicator]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -641,15 +652,29 @@ function buildIndicatorSourceOptions(indicator) {
 function renderIndicatorSettingsPopoverContent(indicatorId) {
   const indicator = indicatorById(indicatorId);
   if (!indicator) return;
+  const def = INDICATOR_TYPE_DEFS[indicator.type];
   const popover = document.querySelector("#indicator-settings-popover");
+  const fieldsHtml = def.fields
+    .map(
+      (field) => `
+    <label>${escapeHtml(field.label)}
+      <input type="number" min="${field.min}" max="${field.max}" step="${field.step || 1}" data-field="${field.key}" value="${indicator[field.key]}" />
+    </label>
+  `
+    )
+    .join("");
   popover.innerHTML = `
-    <label>Period <input type="number" min="2" max="200" id="indicator-settings-period" value="${indicator.period}" /></label>
+    ${fieldsHtml}
     <label>Color <input type="color" id="indicator-settings-color" value="${indicator.color}" /></label>
     <label>Source <select id="indicator-settings-source">${buildIndicatorSourceOptions(indicator)}</select></label>
   `;
-  popover.querySelector("#indicator-settings-period").addEventListener("change", (event) => {
-    const period = Math.max(2, Math.min(200, Number(event.target.value) || indicator.period));
-    updateIndicator(indicatorId, { period });
+  popover.querySelectorAll("[data-field]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const field = def.fields.find((f) => f.key === event.target.dataset.field);
+      const raw = Number(event.target.value);
+      const clamped = Number.isFinite(raw) ? Math.max(field.min, Math.min(field.max, raw)) : indicator[field.key];
+      updateIndicator(indicatorId, { [field.key]: clamped });
+    });
   });
   popover.querySelector("#indicator-settings-color").addEventListener("input", (event) => {
     updateIndicator(indicatorId, { color: event.target.value });
@@ -841,14 +866,58 @@ const GRANULARITY_LABEL = {
 // Technical indicators, including "indicator on indicator" layering (see
 // https://www.tradingview.com/support/solutions/43000474048): each active
 // indicator's `sourceId` is either "close" (raw bar closes) or another active
-// indicator's own id, in which case ITS output feeds this one's calculation -
-// e.g. an EMA applied to an RSI's own line, not to price. An indicator that
-// layers onto another renders in that source's panel (price overlay vs the
-// oscillator panel below), not its own type's default panel, matching how a
-// "moving average of RSI" plots inside the RSI pane on a real platform.
+// indicator's own id, in which case ITS primary output feeds this one's
+// calculation - e.g. an EMA applied to an RSI's own line, not to price. An
+// indicator that layers onto another renders in that source's PANEL GROUP
+// ("overlay" on price, or a named sub-panel like "rsi"/"macd"), not its own
+// type's default, matching how a "moving average of RSI" plots inside the RSI
+// pane on a real platform rather than on price.
+//
+// Every indicator can produce more than one named output series (e.g.
+// Bollinger Bands: upper/middle/lower; MACD: macd/signal/histogram) - `fields`
+// declares its adjustable numeric parameters (rendered as inputs in the
+// settings popover), `primaryOutput` names which one feeds a dependent
+// indicator's Source, and `panelGroup` indicators sharing the exact same group
+// stack into ONE shared sub-panel with one scale (e.g. two RSIs share the
+// 0-100 panel; a future second MACD would share the MACD panel's own scale).
 const INDICATOR_TYPE_DEFS = {
-  ema: { label: "EMA", defaultPeriod: 9, panel: "overlay" },
-  rsi: { label: "RSI", defaultPeriod: 14, panel: "oscillator" },
+  sma: {
+    label: "SMA",
+    panelGroup: "overlay",
+    primaryOutput: "value",
+    fields: [{ key: "period", label: "Period", default: 20, min: 2, max: 400 }],
+  },
+  ema: {
+    label: "EMA",
+    panelGroup: "overlay",
+    primaryOutput: "value",
+    fields: [{ key: "period", label: "Period", default: 9, min: 2, max: 400 }],
+  },
+  bb: {
+    label: "Bollinger Bands",
+    panelGroup: "overlay",
+    primaryOutput: "middle", // the SMA basis line - the one sensible single series when something layers onto BB
+    fields: [
+      { key: "period", label: "Period", default: 20, min: 2, max: 400 },
+      { key: "stdDev", label: "Std Dev", default: 2, min: 0.5, max: 10, step: 0.5 },
+    ],
+  },
+  rsi: {
+    label: "RSI",
+    panelGroup: "rsi",
+    primaryOutput: "value",
+    fields: [{ key: "period", label: "Period", default: 14, min: 2, max: 400 }],
+  },
+  macd: {
+    label: "MACD",
+    panelGroup: "macd",
+    primaryOutput: "macd",
+    fields: [
+      { key: "fastPeriod", label: "Fast", default: 12, min: 2, max: 400 },
+      { key: "slowPeriod", label: "Slow", default: 26, min: 2, max: 400 },
+      { key: "signalPeriod", label: "Signal", default: 9, min: 2, max: 400 },
+    ],
+  },
 };
 const INDICATOR_COLORS = ["#f2c14e", "#8ab4f8", "#7cf0b3", "#ff9b9b", "#c792ea", "#7ee7e0"];
 const ACTIVE_INDICATORS_KEY = "rp-bot-active-indicators";
@@ -884,10 +953,10 @@ function addIndicator(type) {
   const indicator = {
     id: `ind-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     type,
-    period: def.defaultPeriod,
     color: nextIndicatorColor(),
     sourceId: "close",
   };
+  def.fields.forEach((field) => (indicator[field.key] = field.default));
   activeIndicators.push(indicator);
   saveActiveIndicators();
   renderActiveIndicatorChips();
@@ -930,11 +999,24 @@ function wouldCreateIndicatorCycle(forId, candidateSourceId) {
   return false;
 }
 
-function resolveIndicatorPanel(indicator, stack = new Set()) {
-  if (indicator.sourceId === "close" || stack.has(indicator.id)) return INDICATOR_TYPE_DEFS[indicator.type].panel;
+function resolveIndicatorPanelGroup(indicator, stack = new Set()) {
+  if (indicator.sourceId === "close" || stack.has(indicator.id)) return INDICATOR_TYPE_DEFS[indicator.type].panelGroup;
   stack.add(indicator.id);
   const source = indicatorById(indicator.sourceId);
-  return source ? resolveIndicatorPanel(source, stack) : INDICATOR_TYPE_DEFS[indicator.type].panel;
+  return source ? resolveIndicatorPanelGroup(source, stack) : INDICATOR_TYPE_DEFS[indicator.type].panelGroup;
+}
+
+function computeSMASeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  if (values.length < period) return out;
+  let sum = 0;
+  for (let i = 0; i < period; i += 1) sum += values[i];
+  out[period - 1] = sum / period;
+  for (let i = period; i < values.length; i += 1) {
+    sum += values[i] - values[i - period];
+    out[i] = sum / period;
+  }
+  return out;
 }
 
 function computeEMASeries(values, period) {
@@ -978,10 +1060,46 @@ function computeRSISeries(values, period) {
   return out;
 }
 
-// Runs `computeFn` only over the trailing non-null segment of `values` (a layered
-// indicator's source series starts with nulls until IT has enough data - e.g. RSI
-// needs `period + 1` bars before its first value), then maps the result back onto
-// a full-length array so the caller never has to special-case the leading gap.
+// Bollinger Bands: an SMA basis line plus `stdDevMultiplier` standard
+// deviations of the SAME trailing window, above and below it.
+function computeBollingerBandsSeries(values, period, stdDevMultiplier) {
+  const middle = computeSMASeries(values, period);
+  const upper = new Array(values.length).fill(null);
+  const lower = new Array(values.length).fill(null);
+  for (let i = period - 1; i < values.length; i += 1) {
+    let sumSquares = 0;
+    for (let j = i - period + 1; j <= i; j += 1) {
+      const diff = values[j] - middle[i];
+      sumSquares += diff * diff;
+    }
+    const stdDev = Math.sqrt(sumSquares / period);
+    upper[i] = middle[i] + stdDevMultiplier * stdDev;
+    lower[i] = middle[i] - stdDevMultiplier * stdDev;
+  }
+  return { upper, middle, lower };
+}
+
+// MACD: fast EMA minus slow EMA (the MACD line), an EMA of THAT line (the
+// signal line), and their difference (the histogram). Assumes `values` has no
+// leading nulls - computeIndicatorOutputs strips those before calling in.
+function computeMACDSeries(values, fastPeriod, slowPeriod, signalPeriod) {
+  const fastEma = computeEMASeries(values, fastPeriod);
+  const slowEma = computeEMASeries(values, slowPeriod);
+  const macd = values.map((_, i) => (fastEma[i] !== null && slowEma[i] !== null ? fastEma[i] - slowEma[i] : null));
+  const firstMacdIndex = macd.findIndex((v) => v !== null);
+  const signal = macd.map(() => null);
+  if (firstMacdIndex !== -1) {
+    computeEMASeries(macd.slice(firstMacdIndex), signalPeriod).forEach((v, i) => (signal[firstMacdIndex + i] = v));
+  }
+  const histogram = macd.map((v, i) => (v !== null && signal[i] !== null ? v - signal[i] : null));
+  return { macd, signal, histogram };
+}
+
+// Runs a single-series compute function only over the trailing non-null segment
+// of `values` (a layered indicator's source series starts with nulls until IT
+// has enough data - e.g. RSI needs `period + 1` bars before its first value),
+// then maps the result back onto a full-length array padded with those same
+// leading nulls, so callers never have to special-case the gap.
 function computeOverValidSegment(values, period, computeFn) {
   const firstValidIndex = values.findIndex((v) => v !== null && v !== undefined);
   if (firstValidIndex === -1) return values.map(() => null);
@@ -991,15 +1109,42 @@ function computeOverValidSegment(values, period, computeFn) {
   return out;
 }
 
-// Computes one indicator's full output series over EVERY bar (not just the
-// currently-visible slice) so zooming/panning never changes an already-displayed
-// value by re-seeding EMA/RSI from a truncated window - callers slice the result
-// down to view.start..view.end for actual plotting, the same pattern the candles
-// themselves already use. `cache` memoizes within one render pass since a layered
-// indicator's source may be shared by more than one dependent.
-function resolveIndicatorSeries(indicator, bars, cache, stack = new Set()) {
+// Same padding idea as computeOverValidSegment, but for a multi-series compute
+// function (Bollinger Bands, MACD) that returns an {name: [...]} object instead
+// of a single flat array. `outputKeys` is passed explicitly (rather than reading
+// computeFn's result) so a too-short source series still yields the full,
+// correctly-shaped object of all-null arrays instead of an empty {}, which
+// downstream .slice() calls would otherwise crash on.
+function computeMultiSeriesOverValidSegment(values, outputKeys, computeFn) {
+  const firstValidIndex = values.findIndex((v) => v !== null && v !== undefined);
+  if (firstValidIndex === -1) {
+    const nulls = {};
+    outputKeys.forEach((key) => (nulls[key] = values.map(() => null)));
+    return nulls;
+  }
+  const result = computeFn(values.slice(firstValidIndex));
+  const padded = {};
+  outputKeys.forEach((key) => {
+    const series = result[key] || [];
+    const out = new Array(values.length).fill(null);
+    series.forEach((v, i) => (out[firstValidIndex + i] = v));
+    padded[key] = out;
+  });
+  return padded;
+}
+
+// Computes one indicator's full set of named output series over EVERY bar (not
+// just the currently-visible slice) so zooming/panning never changes an
+// already-displayed value by re-seeding from a truncated window - callers slice
+// the result down to view.start..view.end for actual plotting, the same pattern
+// the candles themselves already use. `cache` memoizes within one render pass
+// since a layered indicator's source may be shared by more than one dependent.
+function resolveIndicatorOutputs(indicator, bars, cache, stack = new Set()) {
   if (cache[indicator.id]) return cache[indicator.id];
-  if (stack.has(indicator.id)) return bars.map(() => null);
+  if (stack.has(indicator.id)) {
+    const nulls = bars.map(() => null);
+    return { value: nulls, upper: nulls, middle: nulls, lower: nulls, macd: nulls, signal: nulls, histogram: nulls };
+  }
   stack.add(indicator.id);
 
   const sourceValues =
@@ -1007,20 +1152,41 @@ function resolveIndicatorSeries(indicator, bars, cache, stack = new Set()) {
       ? bars.map((bar) => bar.close)
       : (() => {
           const sourceIndicator = indicatorById(indicator.sourceId);
-          return sourceIndicator ? resolveIndicatorSeries(sourceIndicator, bars, cache, stack) : bars.map(() => null);
+          return sourceIndicator ? resolveIndicatorPrimarySeries(sourceIndicator, bars, cache, stack) : bars.map(() => null);
         })();
 
   let result;
-  if (indicator.type === "ema") result = computeOverValidSegment(sourceValues, indicator.period, computeEMASeries);
-  else if (indicator.type === "rsi") result = computeOverValidSegment(sourceValues, indicator.period, computeRSISeries);
-  else result = bars.map(() => null);
+  if (indicator.type === "sma") result = { value: computeOverValidSegment(sourceValues, indicator.period, computeSMASeries) };
+  else if (indicator.type === "ema") result = { value: computeOverValidSegment(sourceValues, indicator.period, computeEMASeries) };
+  else if (indicator.type === "rsi") result = { value: computeOverValidSegment(sourceValues, indicator.period, computeRSISeries) };
+  else if (indicator.type === "bb") {
+    result = computeMultiSeriesOverValidSegment(sourceValues, ["upper", "middle", "lower"], (valid) =>
+      computeBollingerBandsSeries(valid, indicator.period, indicator.stdDev)
+    );
+  } else if (indicator.type === "macd") {
+    result = computeMultiSeriesOverValidSegment(sourceValues, ["macd", "signal", "histogram"], (valid) =>
+      computeMACDSeries(valid, indicator.fastPeriod, indicator.slowPeriod, indicator.signalPeriod)
+    );
+  } else {
+    result = { value: bars.map(() => null) };
+  }
 
   cache[indicator.id] = result;
   return result;
 }
 
+// The one series a dependent indicator's Source resolves to when it points at
+// this indicator (see primaryOutput in INDICATOR_TYPE_DEFS).
+function resolveIndicatorPrimarySeries(indicator, bars, cache, stack) {
+  const outputs = resolveIndicatorOutputs(indicator, bars, cache, stack);
+  const key = INDICATOR_TYPE_DEFS[indicator.type].primaryOutput;
+  return outputs[key] || bars.map(() => null);
+}
+
 function indicatorDisplayLabel(indicator) {
-  const base = `${INDICATOR_TYPE_DEFS[indicator.type].label}(${indicator.period})`;
+  const def = INDICATOR_TYPE_DEFS[indicator.type];
+  const paramText = def.fields.map((field) => indicator[field.key]).join(",");
+  const base = `${def.label}(${paramText})`;
   if (indicator.sourceId === "close") return base;
   const source = indicatorById(indicator.sourceId);
   return source ? `${base} on ${indicatorDisplayLabel(source)}` : base;
@@ -1053,38 +1219,55 @@ function renderChart() {
   ctx.font = "16px Segoe UI, sans-serif";
   ctx.fillText(`${symbol} ${GRANULARITY_LABEL[granularity]}`, padding.left, 24);
 
-  // Indicators (see INDICATOR_TYPE_DEFS above): computed once over the full bars
-  // array, sliced per-view below for both plotting and the overlay min/max scan,
-  // so a line placed on the price panel never gets clipped by the candle range.
+  // Indicators (see INDICATOR_TYPE_DEFS above): every active indicator's full set
+  // of named output series is computed once over the whole bars array, sliced
+  // per-view below for both plotting and the overlay min/max scan, so a line
+  // placed on the price panel never gets clipped by the candle range.
   const indicatorCache = {};
-  const indicatorSeriesById = {};
+  const indicatorOutputsById = {};
   activeIndicators.forEach((indicator) => {
-    indicatorSeriesById[indicator.id] = resolveIndicatorSeries(indicator, bars, indicatorCache);
+    indicatorOutputsById[indicator.id] = resolveIndicatorOutputs(indicator, bars, indicatorCache);
   });
-  const overlayIndicators = activeIndicators.filter((ind) => resolveIndicatorPanel(ind) === "overlay");
-  const oscillatorIndicators = activeIndicators.filter((ind) => resolveIndicatorPanel(ind) === "oscillator");
+  const overlayIndicators = activeIndicators.filter((ind) => resolveIndicatorPanelGroup(ind) === "overlay");
+  const subPanelIndicators = activeIndicators.filter((ind) => resolveIndicatorPanelGroup(ind) !== "overlay");
+  // Stable, first-seen order of the distinct sub-panel groups actually in use
+  // right now (e.g. ["rsi", "macd"]) - each gets its own stacked panel and scale.
+  const subPanelGroups = [...new Set(subPanelIndicators.map((ind) => resolveIndicatorPanelGroup(ind)))];
 
   const highs = visibleBars.map((bar) => bar.high);
   const lows = visibleBars.map((bar) => bar.low);
   overlayIndicators.forEach((indicator) => {
-    for (let i = view.start; i < view.end; i += 1) {
-      const value = indicatorSeriesById[indicator.id][i];
-      if (value !== null && value !== undefined) {
-        highs.push(value);
-        lows.push(value);
+    Object.values(indicatorOutputsById[indicator.id]).forEach((series) => {
+      for (let i = view.start; i < view.end; i += 1) {
+        const value = series[i];
+        if (value !== null && value !== undefined) {
+          highs.push(value);
+          lows.push(value);
+        }
       }
-    }
+    });
   });
   const maxPrice = Math.max(...highs);
   const minPrice = Math.min(...lows);
   const priceRange = maxPrice - minPrice || 1;
   const chartWidth = width - padding.left - padding.right;
-  // Oscillator-panel indicators (RSI, or anything layered onto one) get their own
-  // fixed-height region below the price panel, shrinking it accordingly - the
-  // same trick TradingView uses to stack an RSI/MACD pane under the candles.
-  const oscillatorPanelHeight = oscillatorIndicators.length ? 110 : 0;
-  const oscillatorGap = oscillatorIndicators.length ? 14 : 0;
-  const chartHeight = height - padding.top - padding.bottom - oscillatorPanelHeight - oscillatorGap;
+  // Each active sub-panel group (RSI, MACD, ...) gets its own fixed-height region
+  // below the price panel, shrinking it accordingly - the same trick TradingView
+  // uses to stack an RSI/MACD pane under the candles. Two different groups (say
+  // RSI AND MACD both active) stack as two separate panels, each own-scaled -
+  // sharing one scale wouldn't make sense (RSI is always 0-100, MACD is priced).
+  // Scaled down from the 110px default when stacking 2+ sub-panels would otherwise
+  // crush the price panel below a usable height, especially in the compact
+  // (non-expanded) canvas - the price chart always keeps at least MIN_PRICE_PANEL_HEIGHT.
+  const MIN_PRICE_PANEL_HEIGHT = 120;
+  const requestedSubPanelHeight = 110;
+  const requestedSubPanelGap = 14;
+  const requestedSubPanelTotal = subPanelGroups.length * (requestedSubPanelHeight + requestedSubPanelGap);
+  const availableForSubPanels = Math.max(0, height - padding.top - padding.bottom - MIN_PRICE_PANEL_HEIGHT);
+  const subPanelScale = requestedSubPanelTotal > availableForSubPanels && requestedSubPanelTotal ? availableForSubPanels / requestedSubPanelTotal : 1;
+  const subPanelHeight = requestedSubPanelHeight * subPanelScale;
+  const subPanelGap = requestedSubPanelGap * subPanelScale;
+  const chartHeight = height - padding.top - padding.bottom - subPanelGroups.length * (subPanelHeight + subPanelGap);
   const candleGap = 2;
   const candleWidth = Math.max(1, chartWidth / visibleBars.length - candleGap);
   const yFor = (price) => padding.top + ((maxPrice - price) / priceRange) * chartHeight;
@@ -1132,15 +1315,22 @@ function renderChart() {
   });
 
   overlayIndicators.forEach((indicator) => {
-    drawIndicatorLine(ctx, indicatorSeriesById[indicator.id].slice(view.start, view.end), indicator.color, padding, candleStep, yFor);
+    const outputs = indicatorOutputsById[indicator.id];
+    if (indicator.type === "bb") {
+      drawBollingerBands(ctx, outputs, indicator.color, view, padding, candleStep, yFor);
+    } else {
+      const key = INDICATOR_TYPE_DEFS[indicator.type].primaryOutput;
+      drawIndicatorLine(ctx, outputs[key].slice(view.start, view.end), indicator.color, padding, candleStep, yFor);
+    }
   });
 
   let axisY = padding.top + chartHeight;
-  if (oscillatorIndicators.length) {
-    const oscillatorTop = axisY + oscillatorGap;
-    drawOscillatorPanel(ctx, oscillatorIndicators, indicatorSeriesById, view, padding, candleStep, oscillatorTop, oscillatorPanelHeight, width);
-    axisY = oscillatorTop + oscillatorPanelHeight;
-  }
+  subPanelGroups.forEach((group) => {
+    const panelTop = axisY + subPanelGap;
+    const groupIndicators = subPanelIndicators.filter((ind) => resolveIndicatorPanelGroup(ind) === group);
+    drawIndicatorSubPanel(ctx, group, groupIndicators, indicatorOutputsById, view, padding, candleStep, panelTop, subPanelHeight, width);
+    axisY = panelTop + subPanelHeight;
+  });
 
   drawXAxis(ctx, visibleBars, padding, chartWidth, axisY, candleStep, granularity);
   drawAnnotations(ctx);
@@ -1167,12 +1357,73 @@ function drawIndicatorLine(ctx, series, color, padding, candleStep, yFor) {
   ctx.stroke();
 }
 
-// Oscillator panel is fixed to a 0-100 scale, matching RSI's own conventional
-// range - the only oscillator type this app has. A future oscillator with a
-// different natural range (e.g. a MACD histogram) would need this scale computed
-// from the plotted series instead of assumed, same as the price panel already
-// does for candles.
-function drawOscillatorPanel(ctx, oscillatorIndicators, indicatorSeriesById, view, padding, candleStep, top, panelHeight, width) {
+// Upper/lower drawn as lines plus a faint shaded fill between them, middle
+// (the SMA basis) drawn solid - the conventional Bollinger Bands look.
+function drawBollingerBands(ctx, outputs, color, view, padding, candleStep, yFor) {
+  const upper = outputs.upper.slice(view.start, view.end);
+  const lower = outputs.lower.slice(view.start, view.end);
+  const middle = outputs.middle.slice(view.start, view.end);
+
+  ctx.fillStyle = withAlpha(color, 0.08);
+  ctx.beginPath();
+  let started = false;
+  upper.forEach((value, index) => {
+    if (value === null || value === undefined) return;
+    const x = padding.left + index * candleStep + candleStep / 2;
+    const y = yFor(value);
+    if (started) ctx.lineTo(x, y);
+    else {
+      ctx.moveTo(x, y);
+      started = true;
+    }
+  });
+  for (let i = lower.length - 1; i >= 0; i -= 1) {
+    const value = lower[i];
+    if (value === null || value === undefined) continue;
+    ctx.lineTo(padding.left + i * candleStep + candleStep / 2, yFor(value));
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  drawIndicatorLine(ctx, upper, withAlpha(color, 0.7), padding, candleStep, yFor);
+  drawIndicatorLine(ctx, lower, withAlpha(color, 0.7), padding, candleStep, yFor);
+  drawIndicatorLine(ctx, middle, color, padding, candleStep, yFor);
+}
+
+// Vertical bars from the zero line, colored like the app's own up/down candles -
+// the conventional MACD histogram look.
+function drawIndicatorHistogram(ctx, series, padding, candleStep, yForPanel) {
+  const zeroY = yForPanel(0);
+  series.forEach((value, index) => {
+    if (value === null || value === undefined) return;
+    const x = padding.left + index * candleStep + candleStep * 0.2;
+    const barWidth = Math.max(1, candleStep * 0.6);
+    const y = yForPanel(value);
+    ctx.fillStyle = value >= 0 ? "rgba(124, 240, 179, 0.55)" : "rgba(255, 155, 155, 0.55)";
+    ctx.fillRect(x, Math.min(y, zeroY), barWidth, Math.max(1, Math.abs(y - zeroY)));
+  });
+}
+
+function drawPanelReferenceLevels(ctx, levels, yForPanel, left, panelWidth, labelFor = String) {
+  ctx.font = "10px Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  levels.forEach((level) => {
+    const y = yForPanel(level);
+    ctx.strokeStyle = "rgba(190, 213, 230, 0.10)";
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(left + panelWidth, y);
+    ctx.stroke();
+    ctx.fillStyle = "#7f93a4";
+    ctx.fillText(labelFor(level), left + panelWidth + 10, y + 3);
+  });
+}
+
+// One stacked sub-panel for a single panel GROUP (e.g. every active RSI-type
+// indicator sharing the 0-100 scale, or every MACD-type indicator sharing a
+// scale fit to their own values) - see the panelGroup comment on
+// INDICATOR_TYPE_DEFS for why groups don't share panels with each other.
+function drawIndicatorSubPanel(ctx, group, indicators, outputsById, view, padding, candleStep, top, panelHeight, width) {
   const left = padding.left;
   const panelWidth = width - padding.left - padding.right;
   ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
@@ -1180,24 +1431,40 @@ function drawOscillatorPanel(ctx, oscillatorIndicators, indicatorSeriesById, vie
   ctx.strokeStyle = "rgba(190, 213, 230, 0.14)";
   ctx.strokeRect(left, top, panelWidth, panelHeight);
 
-  const yForOscillator = (value) => top + panelHeight - (value / 100) * panelHeight;
-  ctx.font = "10px Segoe UI, sans-serif";
-  ctx.textAlign = "left";
-  [30, 50, 70].forEach((level) => {
-    const y = yForOscillator(level);
-    ctx.strokeStyle = "rgba(190, 213, 230, 0.10)";
-    ctx.beginPath();
-    ctx.moveTo(left, y);
-    ctx.lineTo(left + panelWidth, y);
-    ctx.stroke();
-    ctx.fillStyle = "#7f93a4";
-    ctx.fillText(String(level), left + panelWidth + 10, y + 3);
-  });
+  if (group === "rsi") {
+    const yForPanel = (value) => top + panelHeight - (value / 100) * panelHeight;
+    drawPanelReferenceLevels(ctx, [30, 50, 70], yForPanel, left, panelWidth);
+    indicators.forEach((indicator) => {
+      const series = outputsById[indicator.id].value.slice(view.start, view.end);
+      drawIndicatorLine(ctx, series, indicator.color, padding, candleStep, yForPanel);
+    });
+    return;
+  }
 
-  oscillatorIndicators.forEach((indicator) => {
-    const series = indicatorSeriesById[indicator.id].slice(view.start, view.end);
-    drawIndicatorLine(ctx, series, indicator.color, padding, candleStep, yForOscillator);
-  });
+  if (group === "macd") {
+    // MACD has no fixed natural range (it scales with the symbol's own price) -
+    // fit the panel to the biggest magnitude actually on screen, same idea as
+    // the price panel's own min/max scan, centered on a zero line.
+    const magnitudes = [];
+    indicators.forEach((indicator) => {
+      const outputs = outputsById[indicator.id];
+      ["macd", "signal", "histogram"].forEach((key) => {
+        for (let i = view.start; i < view.end; i += 1) {
+          const value = outputs[key][i];
+          if (value !== null && value !== undefined) magnitudes.push(Math.abs(value));
+        }
+      });
+    });
+    const maxMagnitude = Math.max(0.01, ...magnitudes);
+    const yForPanel = (value) => top + panelHeight / 2 - (value / maxMagnitude) * (panelHeight / 2);
+    drawPanelReferenceLevels(ctx, [0], yForPanel, left, panelWidth, () => "0");
+    indicators.forEach((indicator) => {
+      const outputs = outputsById[indicator.id];
+      drawIndicatorHistogram(ctx, outputs.histogram.slice(view.start, view.end), padding, candleStep, yForPanel);
+      drawIndicatorLine(ctx, outputs.macd.slice(view.start, view.end), indicator.color, padding, candleStep, yForPanel);
+      drawIndicatorLine(ctx, outputs.signal.slice(view.start, view.end), withAlpha(indicator.color, 0.6), padding, candleStep, yForPanel);
+    });
+  }
 }
 
 function xAxisLabels(timestamp, granularity) {
