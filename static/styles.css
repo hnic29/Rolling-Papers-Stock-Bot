@@ -1014,6 +1014,90 @@ form {
   font-weight: 600;
 }
 
+.indicator-picker {
+  position: relative;
+}
+
+.indicator-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 10px;
+}
+
+.indicator-chip {
+  align-items: center;
+  background: rgba(190, 213, 230, 0.08);
+  border: 1px solid rgba(190, 213, 230, 0.16);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+}
+
+.indicator-chip-dot {
+  border-radius: 50%;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.indicator-chip-label {
+  color: #eef6fb;
+  font-size: 12px;
+}
+
+.indicator-chip-gear,
+.indicator-chip-remove {
+  background: none;
+  border: none;
+  border-radius: 50%;
+  color: #a8b9c8;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  min-height: auto;
+  padding: 3px 5px;
+}
+
+.indicator-chip-gear:hover,
+.indicator-chip-remove:hover {
+  background: rgba(190, 213, 230, 0.16);
+  color: #eef6fb;
+}
+
+.indicator-settings-popover {
+  background: #0b141d;
+  border: 1px solid rgba(190, 213, 230, 0.16);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 200px;
+  padding: 12px;
+  position: fixed;
+  z-index: 40;
+}
+
+.indicator-settings-popover[hidden] {
+  display: none;
+}
+
+.indicator-settings-popover label {
+  color: #a8b9c8;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.indicator-settings-popover input,
+.indicator-settings-popover select {
+  min-height: auto;
+  padding: 6px 8px;
+}
+
 .chart-body {
   display: flex;
   gap: 10px;

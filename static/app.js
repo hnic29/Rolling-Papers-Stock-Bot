@@ -564,6 +564,115 @@ function closeIntervalMenu() {
   document.querySelector("#interval-menu").hidden = true;
 }
 
+// Shared by the indicator picker and its settings popover - same reparent-to-body
+// fix as openIntervalMenu (see the comment there re: .panel's backdrop-filter).
+function positionFloatingPanel(panel, anchor) {
+  document.body.appendChild(panel);
+  panel.hidden = false;
+  const anchorRect = anchor.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const top = Math.max(8, Math.min(anchorRect.bottom + 4, window.innerHeight - panelRect.height - 8));
+  const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - panelRect.width - 8));
+  panel.style.top = `${top}px`;
+  panel.style.left = `${left}px`;
+}
+
+function renderIndicatorMenu() {
+  const menu = document.querySelector("#indicator-menu");
+  menu.innerHTML = `
+    <div class="interval-menu-group-label">Overlays (plot on price)</div>
+    <button type="button" class="interval-menu-item" data-add-indicator="ema">EMA - Exponential Moving Average</button>
+    <div class="interval-menu-group-label">Oscillators (own panel)</div>
+    <button type="button" class="interval-menu-item" data-add-indicator="rsi">RSI - Relative Strength Index</button>
+  `;
+  menu.querySelectorAll("[data-add-indicator]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addIndicator(btn.dataset.addIndicator);
+      closeIndicatorMenu();
+    });
+  });
+}
+
+function openIndicatorMenu() {
+  renderIndicatorMenu();
+  positionFloatingPanel(document.querySelector("#indicator-menu"), document.querySelector("#indicator-menu-toggle"));
+}
+
+function closeIndicatorMenu() {
+  document.querySelector("#indicator-menu").hidden = true;
+}
+
+function renderActiveIndicatorChips() {
+  const container = document.querySelector("#indicator-chips");
+  container.innerHTML = activeIndicators
+    .map(
+      (indicator) => `
+    <span class="indicator-chip">
+      <span class="indicator-chip-dot" style="background:${indicator.color}"></span>
+      <span class="indicator-chip-label">${escapeHtml(indicatorDisplayLabel(indicator))}</span>
+      <button type="button" class="indicator-chip-gear" data-settings-for="${indicator.id}" title="Settings">&#9881;</button>
+      <button type="button" class="indicator-chip-remove" data-remove-id="${indicator.id}" title="Remove">&times;</button>
+    </span>
+  `
+    )
+    .join("");
+  container.querySelectorAll("[data-settings-for]").forEach((btn) => {
+    btn.addEventListener("click", () => openIndicatorSettingsPopover(btn.dataset.settingsFor, btn));
+  });
+  container.querySelectorAll("[data-remove-id]").forEach((btn) => {
+    btn.addEventListener("click", () => removeIndicator(btn.dataset.removeId));
+  });
+}
+
+// Every indicator that could legally become `indicator`'s source: Close price,
+// plus any other active indicator that wouldn't create a cycle (see
+// wouldCreateIndicatorCycle) - this is the actual "apply indicator to indicator"
+// control, TradingView's Settings -> Inputs -> Source dropdown equivalent.
+function buildIndicatorSourceOptions(indicator) {
+  const options = [`<option value="close"${indicator.sourceId === "close" ? " selected" : ""}>Close price</option>`];
+  activeIndicators.forEach((other) => {
+    if (other.id === indicator.id || wouldCreateIndicatorCycle(indicator.id, other.id)) return;
+    const selected = indicator.sourceId === other.id ? " selected" : "";
+    options.push(`<option value="${other.id}"${selected}>${escapeHtml(indicatorDisplayLabel(other))}</option>`);
+  });
+  return options.join("");
+}
+
+function renderIndicatorSettingsPopoverContent(indicatorId) {
+  const indicator = indicatorById(indicatorId);
+  if (!indicator) return;
+  const popover = document.querySelector("#indicator-settings-popover");
+  popover.innerHTML = `
+    <label>Period <input type="number" min="2" max="200" id="indicator-settings-period" value="${indicator.period}" /></label>
+    <label>Color <input type="color" id="indicator-settings-color" value="${indicator.color}" /></label>
+    <label>Source <select id="indicator-settings-source">${buildIndicatorSourceOptions(indicator)}</select></label>
+  `;
+  popover.querySelector("#indicator-settings-period").addEventListener("change", (event) => {
+    const period = Math.max(2, Math.min(200, Number(event.target.value) || indicator.period));
+    updateIndicator(indicatorId, { period });
+  });
+  popover.querySelector("#indicator-settings-color").addEventListener("input", (event) => {
+    updateIndicator(indicatorId, { color: event.target.value });
+  });
+  popover.querySelector("#indicator-settings-source").addEventListener("change", (event) => {
+    updateIndicator(indicatorId, { sourceId: event.target.value });
+    // The valid source list just changed (this indicator now has a different
+    // dependency chain) - rebuild content in place, but don't reposition: the
+    // gear button that anchored the original open() may no longer be the same
+    // DOM node after renderActiveIndicatorChips() re-rendered the chip row.
+    renderIndicatorSettingsPopoverContent(indicatorId);
+  });
+}
+
+function openIndicatorSettingsPopover(indicatorId, anchor) {
+  renderIndicatorSettingsPopoverContent(indicatorId);
+  positionFloatingPanel(document.querySelector("#indicator-settings-popover"), anchor);
+}
+
+function closeIndicatorSettingsPopover() {
+  document.querySelector("#indicator-settings-popover").hidden = true;
+}
+
 let chartState = null;
 const MIN_VISIBLE_CANDLES = 10;
 
@@ -729,6 +838,194 @@ const GRANULARITY_LABEL = {
   month: "monthly candles",
 };
 
+// Technical indicators, including "indicator on indicator" layering (see
+// https://www.tradingview.com/support/solutions/43000474048): each active
+// indicator's `sourceId` is either "close" (raw bar closes) or another active
+// indicator's own id, in which case ITS output feeds this one's calculation -
+// e.g. an EMA applied to an RSI's own line, not to price. An indicator that
+// layers onto another renders in that source's panel (price overlay vs the
+// oscillator panel below), not its own type's default panel, matching how a
+// "moving average of RSI" plots inside the RSI pane on a real platform.
+const INDICATOR_TYPE_DEFS = {
+  ema: { label: "EMA", defaultPeriod: 9, panel: "overlay" },
+  rsi: { label: "RSI", defaultPeriod: 14, panel: "oscillator" },
+};
+const INDICATOR_COLORS = ["#f2c14e", "#8ab4f8", "#7cf0b3", "#ff9b9b", "#c792ea", "#7ee7e0"];
+const ACTIVE_INDICATORS_KEY = "rp-bot-active-indicators";
+
+let activeIndicators = loadActiveIndicators();
+
+function loadActiveIndicators() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(ACTIVE_INDICATORS_KEY));
+    if (Array.isArray(stored)) return stored.filter((ind) => ind && INDICATOR_TYPE_DEFS[ind.type]);
+  } catch {
+    /* corrupt/old localStorage value - fall through to no indicators */
+  }
+  return [];
+}
+
+function saveActiveIndicators() {
+  localStorage.setItem(ACTIVE_INDICATORS_KEY, JSON.stringify(activeIndicators));
+}
+
+function indicatorById(id) {
+  return activeIndicators.find((ind) => ind.id === id);
+}
+
+function nextIndicatorColor() {
+  const used = new Set(activeIndicators.map((ind) => ind.color));
+  return INDICATOR_COLORS.find((color) => !used.has(color)) || INDICATOR_COLORS[activeIndicators.length % INDICATOR_COLORS.length];
+}
+
+function addIndicator(type) {
+  const def = INDICATOR_TYPE_DEFS[type];
+  if (!def) return;
+  const indicator = {
+    id: `ind-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    type,
+    period: def.defaultPeriod,
+    color: nextIndicatorColor(),
+    sourceId: "close",
+  };
+  activeIndicators.push(indicator);
+  saveActiveIndicators();
+  renderActiveIndicatorChips();
+  if (chartState) renderChart();
+}
+
+function removeIndicator(id) {
+  // Anything sourced FROM this indicator would otherwise point at a dangling id -
+  // fall those back to Close so they keep computing rather than going blank.
+  activeIndicators.forEach((ind) => {
+    if (ind.sourceId === id) ind.sourceId = "close";
+  });
+  activeIndicators = activeIndicators.filter((ind) => ind.id !== id);
+  saveActiveIndicators();
+  renderActiveIndicatorChips();
+  if (chartState) renderChart();
+}
+
+function updateIndicator(id, changes) {
+  const indicator = indicatorById(id);
+  if (!indicator) return;
+  Object.assign(indicator, changes);
+  saveActiveIndicators();
+  renderActiveIndicatorChips();
+  if (chartState) renderChart();
+}
+
+// True if setting `candidateSourceId` as `forId`'s source would create a cycle
+// (forId already feeds, directly or transitively, into candidateSourceId).
+function wouldCreateIndicatorCycle(forId, candidateSourceId) {
+  let current = candidateSourceId;
+  const seen = new Set();
+  while (current !== "close" && current) {
+    if (current === forId) return true;
+    if (seen.has(current)) return true; // already-inconsistent state - refuse rather than loop forever
+    seen.add(current);
+    const source = indicatorById(current);
+    current = source ? source.sourceId : "close";
+  }
+  return false;
+}
+
+function resolveIndicatorPanel(indicator, stack = new Set()) {
+  if (indicator.sourceId === "close" || stack.has(indicator.id)) return INDICATOR_TYPE_DEFS[indicator.type].panel;
+  stack.add(indicator.id);
+  const source = indicatorById(indicator.sourceId);
+  return source ? resolveIndicatorPanel(source, stack) : INDICATOR_TYPE_DEFS[indicator.type].panel;
+}
+
+function computeEMASeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  if (values.length < period) return out;
+  let seed = 0;
+  for (let i = 0; i < period; i += 1) seed += values[i];
+  let prevEma = seed / period;
+  out[period - 1] = prevEma;
+  const k = 2 / (period + 1);
+  for (let i = period; i < values.length; i += 1) {
+    prevEma = values[i] * k + prevEma * (1 - k);
+    out[i] = prevEma;
+  }
+  return out;
+}
+
+// Wilder's RSI - the same smoothing convention used by TradingView, Alpaca's own
+// docs, and app/strategies/small_account_pullback.py's backend RSI math.
+function computeRSISeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  if (values.length < period + 1) return out;
+  let gainSum = 0;
+  let lossSum = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const change = values[i] - values[i - 1];
+    if (change >= 0) gainSum += change;
+    else lossSum -= change;
+  }
+  let avgGain = gainSum / period;
+  let avgLoss = lossSum / period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < values.length; i += 1) {
+    const change = values[i] - values[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? -change : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
+// Runs `computeFn` only over the trailing non-null segment of `values` (a layered
+// indicator's source series starts with nulls until IT has enough data - e.g. RSI
+// needs `period + 1` bars before its first value), then maps the result back onto
+// a full-length array so the caller never has to special-case the leading gap.
+function computeOverValidSegment(values, period, computeFn) {
+  const firstValidIndex = values.findIndex((v) => v !== null && v !== undefined);
+  if (firstValidIndex === -1) return values.map(() => null);
+  const computed = computeFn(values.slice(firstValidIndex), period);
+  const out = new Array(values.length).fill(null);
+  computed.forEach((v, i) => (out[firstValidIndex + i] = v));
+  return out;
+}
+
+// Computes one indicator's full output series over EVERY bar (not just the
+// currently-visible slice) so zooming/panning never changes an already-displayed
+// value by re-seeding EMA/RSI from a truncated window - callers slice the result
+// down to view.start..view.end for actual plotting, the same pattern the candles
+// themselves already use. `cache` memoizes within one render pass since a layered
+// indicator's source may be shared by more than one dependent.
+function resolveIndicatorSeries(indicator, bars, cache, stack = new Set()) {
+  if (cache[indicator.id]) return cache[indicator.id];
+  if (stack.has(indicator.id)) return bars.map(() => null);
+  stack.add(indicator.id);
+
+  const sourceValues =
+    indicator.sourceId === "close"
+      ? bars.map((bar) => bar.close)
+      : (() => {
+          const sourceIndicator = indicatorById(indicator.sourceId);
+          return sourceIndicator ? resolveIndicatorSeries(sourceIndicator, bars, cache, stack) : bars.map(() => null);
+        })();
+
+  let result;
+  if (indicator.type === "ema") result = computeOverValidSegment(sourceValues, indicator.period, computeEMASeries);
+  else if (indicator.type === "rsi") result = computeOverValidSegment(sourceValues, indicator.period, computeRSISeries);
+  else result = bars.map(() => null);
+
+  cache[indicator.id] = result;
+  return result;
+}
+
+function indicatorDisplayLabel(indicator) {
+  const base = `${INDICATOR_TYPE_DEFS[indicator.type].label}(${indicator.period})`;
+  if (indicator.sourceId === "close") return base;
+  const source = indicatorById(indicator.sourceId);
+  return source ? `${base} on ${indicatorDisplayLabel(source)}` : base;
+}
+
 function renderChart() {
   const canvas = document.querySelector("#candlestick-chart");
   const ctx = canvas.getContext("2d");
@@ -756,13 +1053,38 @@ function renderChart() {
   ctx.font = "16px Segoe UI, sans-serif";
   ctx.fillText(`${symbol} ${GRANULARITY_LABEL[granularity]}`, padding.left, 24);
 
+  // Indicators (see INDICATOR_TYPE_DEFS above): computed once over the full bars
+  // array, sliced per-view below for both plotting and the overlay min/max scan,
+  // so a line placed on the price panel never gets clipped by the candle range.
+  const indicatorCache = {};
+  const indicatorSeriesById = {};
+  activeIndicators.forEach((indicator) => {
+    indicatorSeriesById[indicator.id] = resolveIndicatorSeries(indicator, bars, indicatorCache);
+  });
+  const overlayIndicators = activeIndicators.filter((ind) => resolveIndicatorPanel(ind) === "overlay");
+  const oscillatorIndicators = activeIndicators.filter((ind) => resolveIndicatorPanel(ind) === "oscillator");
+
   const highs = visibleBars.map((bar) => bar.high);
   const lows = visibleBars.map((bar) => bar.low);
+  overlayIndicators.forEach((indicator) => {
+    for (let i = view.start; i < view.end; i += 1) {
+      const value = indicatorSeriesById[indicator.id][i];
+      if (value !== null && value !== undefined) {
+        highs.push(value);
+        lows.push(value);
+      }
+    }
+  });
   const maxPrice = Math.max(...highs);
   const minPrice = Math.min(...lows);
   const priceRange = maxPrice - minPrice || 1;
   const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
+  // Oscillator-panel indicators (RSI, or anything layered onto one) get their own
+  // fixed-height region below the price panel, shrinking it accordingly - the
+  // same trick TradingView uses to stack an RSI/MACD pane under the candles.
+  const oscillatorPanelHeight = oscillatorIndicators.length ? 110 : 0;
+  const oscillatorGap = oscillatorIndicators.length ? 14 : 0;
+  const chartHeight = height - padding.top - padding.bottom - oscillatorPanelHeight - oscillatorGap;
   const candleGap = 2;
   const candleWidth = Math.max(1, chartWidth / visibleBars.length - candleGap);
   const yFor = (price) => padding.top + ((maxPrice - price) / priceRange) * chartHeight;
@@ -809,8 +1131,73 @@ function renderChart() {
     ctx.fillRect(x, Math.min(openY, closeY), candleWidth, Math.max(2, Math.abs(closeY - openY)));
   });
 
-  drawXAxis(ctx, visibleBars, padding, chartWidth, chartHeight, candleStep, granularity);
+  overlayIndicators.forEach((indicator) => {
+    drawIndicatorLine(ctx, indicatorSeriesById[indicator.id].slice(view.start, view.end), indicator.color, padding, candleStep, yFor);
+  });
+
+  let axisY = padding.top + chartHeight;
+  if (oscillatorIndicators.length) {
+    const oscillatorTop = axisY + oscillatorGap;
+    drawOscillatorPanel(ctx, oscillatorIndicators, indicatorSeriesById, view, padding, candleStep, oscillatorTop, oscillatorPanelHeight, width);
+    axisY = oscillatorTop + oscillatorPanelHeight;
+  }
+
+  drawXAxis(ctx, visibleBars, padding, chartWidth, axisY, candleStep, granularity);
   drawAnnotations(ctx);
+}
+
+function drawIndicatorLine(ctx, series, color, padding, candleStep, yFor) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  series.forEach((value, index) => {
+    if (value === null || value === undefined) {
+      started = false;
+      return;
+    }
+    const x = padding.left + index * candleStep + candleStep / 2;
+    const y = yFor(value);
+    if (started) ctx.lineTo(x, y);
+    else {
+      ctx.moveTo(x, y);
+      started = true;
+    }
+  });
+  ctx.stroke();
+}
+
+// Oscillator panel is fixed to a 0-100 scale, matching RSI's own conventional
+// range - the only oscillator type this app has. A future oscillator with a
+// different natural range (e.g. a MACD histogram) would need this scale computed
+// from the plotted series instead of assumed, same as the price panel already
+// does for candles.
+function drawOscillatorPanel(ctx, oscillatorIndicators, indicatorSeriesById, view, padding, candleStep, top, panelHeight, width) {
+  const left = padding.left;
+  const panelWidth = width - padding.left - padding.right;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+  ctx.fillRect(left, top, panelWidth, panelHeight);
+  ctx.strokeStyle = "rgba(190, 213, 230, 0.14)";
+  ctx.strokeRect(left, top, panelWidth, panelHeight);
+
+  const yForOscillator = (value) => top + panelHeight - (value / 100) * panelHeight;
+  ctx.font = "10px Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  [30, 50, 70].forEach((level) => {
+    const y = yForOscillator(level);
+    ctx.strokeStyle = "rgba(190, 213, 230, 0.10)";
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(left + panelWidth, y);
+    ctx.stroke();
+    ctx.fillStyle = "#7f93a4";
+    ctx.fillText(String(level), left + panelWidth + 10, y + 3);
+  });
+
+  oscillatorIndicators.forEach((indicator) => {
+    const series = indicatorSeriesById[indicator.id].slice(view.start, view.end);
+    drawIndicatorLine(ctx, series, indicator.color, padding, candleStep, yForOscillator);
+  });
 }
 
 function xAxisLabels(timestamp, granularity) {
@@ -826,8 +1213,7 @@ function xAxisLabels(timestamp, granularity) {
   return [timestamp.toLocaleDateString([], { month: "short", day: "numeric" }), String(timestamp.getFullYear())];
 }
 
-function drawXAxis(ctx, visibleBars, padding, chartWidth, chartHeight, candleStep, granularity) {
-  const axisY = padding.top + chartHeight;
+function drawXAxis(ctx, visibleBars, padding, chartWidth, axisY, candleStep, granularity) {
   const targetLabels = Math.max(3, Math.min(10, Math.floor(chartWidth / 90)));
   const step = Math.max(1, Math.ceil(visibleBars.length / targetLabels));
 
@@ -2897,6 +3283,8 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && replayState) exitReplay();
   if (event.key === "Escape" && selectedDrawing) setSelectedDrawing(null);
   if (event.key === "Escape" && !document.querySelector("#interval-menu").hidden) closeIntervalMenu();
+  if (event.key === "Escape" && !document.querySelector("#indicator-menu").hidden) closeIndicatorMenu();
+  if (event.key === "Escape" && !document.querySelector("#indicator-settings-popover").hidden) closeIndicatorSettingsPopover();
   if (event.key === "Escape" && document.querySelector("#section-chart").classList.contains("expanded")) {
     toggleChartExpanded();
   }
@@ -2912,6 +3300,23 @@ document.addEventListener("click", (event) => {
   const menu = document.querySelector("#interval-menu");
   const toggle = document.querySelector("#interval-menu-toggle");
   if (!menu.hidden && !menu.contains(event.target) && event.target !== toggle) closeIntervalMenu();
+});
+
+renderActiveIndicatorChips();
+document.querySelector("#indicator-menu-toggle").addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (document.querySelector("#indicator-menu").hidden) openIndicatorMenu();
+  else closeIndicatorMenu();
+});
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector("#indicator-menu");
+  const toggle = document.querySelector("#indicator-menu-toggle");
+  if (!menu.hidden && !menu.contains(event.target) && event.target !== toggle) closeIndicatorMenu();
+
+  const popover = document.querySelector("#indicator-settings-popover");
+  if (!popover.hidden && !popover.contains(event.target) && !event.target.closest(".indicator-chip-gear")) {
+    closeIndicatorSettingsPopover();
+  }
 });
 
 document.querySelector("#chart-date").addEventListener("change", async () => {

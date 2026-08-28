@@ -165,9 +165,15 @@
               <button id="toggle-chart-live" type="button" title="Stream real-time, second-by-second price ticks onto the chart (requires a Finnhub API key in Settings)">
                 <span class="live-dot" aria-hidden="true"></span>Live
               </button>
+              <div class="indicator-picker">
+                <button type="button" id="indicator-menu-toggle" title="Add a technical indicator, or apply one to another indicator's own output">Indicators &#9662;</button>
+                <div class="interval-menu" id="indicator-menu" hidden></div>
+              </div>
               <button id="toggle-chart-expand" type="button" title="Open this chart in a larger view">Expand</button>
             </div>
           </div>
+          <div class="indicator-chips" id="indicator-chips"></div>
+          <div class="indicator-settings-popover" id="indicator-settings-popover" hidden></div>
           <p class="chart-hint live-status" id="live-status" hidden></p>
           <div class="replay-toolbar" id="replay-toolbar" hidden>
             <button type="button" id="replay-step-back" title="Step back">&#9198;</button>
