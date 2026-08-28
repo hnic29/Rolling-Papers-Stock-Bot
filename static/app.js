@@ -1564,14 +1564,20 @@ let previewPoint = null;
 const drawingsBySymbol = {};
 let activeDrawColor = "#8ab4f8";
 
-// Editing an already-placed drawing (Cursor tool only): click one to select it -
-// selectedDrawing is a direct reference into currentDrawings(), not a copy, so
-// mutating its .points in place is all dragging needs to do. dragState tracks
-// whether the current drag is moving one handle ("point") or the whole shape
-// ("move"), and is null the rest of the time.
+// Editing an already-placed drawing: click one to select it, works no matter
+// which tool is currently active (not just Cursor) - see startPan - so placing
+// a Trendline, say, and immediately nudging its endpoint doesn't require
+// switching tools first. selectedDrawing is a direct reference into
+// currentDrawings(), not a copy, so mutating its .points in place is all
+// dragging needs to do. dragState tracks whether the current drag is moving one
+// handle ("point") or the whole shape ("move"), and is null the rest of the time.
 let selectedDrawing = null;
 let dragState = null;
 const HANDLE_HIT_RADIUS = 9;
+// Set by startPan (mousedown) whenever it handles a select/drag action, so the
+// click event immediately following that same mousedown doesn't ALSO get
+// interpreted as "place a new drawing point" at the same spot.
+let suppressNextDrawClick = false;
 
 function setSelectedDrawing(drawing) {
   selectedDrawing = drawing;
@@ -1808,6 +1814,13 @@ function cancelPendingDrawing() {
 
 function handleChartClick(event) {
   if (!chartState || !chartState.padding) return;
+
+  if (suppressNextDrawClick) {
+    // The mousedown that preceded this click already selected/dragged an
+    // existing drawing (see startPan) - don't ALSO place a new point here.
+    suppressNextDrawClick = false;
+    return;
+  }
 
   if (awaitingReplayStart) {
     const { x, y } = eventToCanvasXY(event);
@@ -2496,19 +2509,23 @@ function zoomChart(event) {
 let panState = null;
 
 function startPan(event) {
-  if (activeDrawTool !== "cursor") return;
   if (!chartState || !chartState.bars.length || !chartState.padding) return;
   const { x, y } = eventToCanvasXY(event);
 
-  // A drawing is already selected - grabbing one of its handles adjusts just that
-  // point; grabbing anywhere else on the drawing's body moves the whole thing.
-  // Either way this takes priority over panning, which only kicks in once nothing
-  // under the cursor is selectable.
-  if (selectedDrawing) {
+  // Selecting/editing an already-placed drawing takes priority over BOTH
+  // panning and starting a new drawing, and works no matter which tool is
+  // active - not just Cursor - so nudging a line you just placed doesn't
+  // require switching tools first. Only once nothing under the cursor is
+  // selectable does it fall through to the active tool's own behavior
+  // (pan for Cursor, or - via handleChartClick - place a new point). Skipped
+  // entirely while a multi-point drawing is half-placed (pendingDrawing) - every
+  // click in that state must go toward finishing it, not selecting something else.
+  if (!pendingDrawing && selectedDrawing) {
     const pointIndex = handleIndexAtCanvasXY(selectedDrawing, x, y);
     if (pointIndex !== -1) {
       dragState = { mode: "point", drawing: selectedDrawing, pointIndex };
       document.querySelector("#candlestick-chart").classList.add("dragging");
+      suppressNextDrawClick = true;
       return;
     }
     if (hitTestDrawing(selectedDrawing, x, y, 8)) {
@@ -2519,15 +2536,25 @@ function startPan(event) {
         originalPoints: selectedDrawing.points.map((p) => ({ ...p })),
       };
       document.querySelector("#candlestick-chart").classList.add("dragging");
+      suppressNextDrawClick = true;
       return;
     }
   }
 
-  const hit = currentDrawings().find((d) => hitTestDrawing(d, x, y, 8));
+  const hit = pendingDrawing ? null : currentDrawings().find((d) => hitTestDrawing(d, x, y, 8));
   if (hit) {
     setSelectedDrawing(hit);
+    suppressNextDrawClick = true;
     return;
   }
+
+  if (activeDrawTool !== "cursor") {
+    // Nothing under the cursor to select - deselect (if anything was selected)
+    // and let the click event place a new drawing point as normal, don't pan.
+    if (selectedDrawing) setSelectedDrawing(null);
+    return;
+  }
+
   if (selectedDrawing) setSelectedDrawing(null);
 
   panState = { startX: event.clientX, view: { ...chartState.view } };
