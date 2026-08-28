@@ -326,8 +326,15 @@
             <label>Symbols <input name="symbols" placeholder="e.g. XPON, GGR — or leave empty and use Auto Scan" title="Score specific symbols against the five pillars. Mega-caps (AAPL, TSLA, ...) will always score low here — their floats are billions of shares, the opposite of what this strategy trades. Auto Scan sweeps the whole market instead." /></label>
             <button type="submit">Scan</button>
             <button id="auto-scan" type="button">Auto Scan</button>
+            <label class="check-row" title="Automatically re-runs Auto Scan every minute so the results keep moving on their own">
+              <input id="scanner-live-toggle" type="checkbox" /> Keep scanning live
+            </label>
           </form>
           <p class="chart-hint">Auto Scan sweeps all ~8,000+ tradable stocks plus today's live top gainers — the same scan auto-trading runs every cycle. The symbol box is for checking specific names.</p>
+          <div class="scanner-status" id="scanner-status">
+            <span id="scanner-status-text">No scan yet — click Auto Scan, or turn on Keep scanning live.</span>
+            <div class="scanner-status-bar" id="scanner-status-bar" hidden><div id="scanner-status-fill"></div></div>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>

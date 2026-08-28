@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from app.brokers.alpaca_broker import AlpacaBroker
 from app.models import ScannerResponse, ScannerResult, Signal, StockCandidate
 from app.paths import resource_path
-from app.services import float_lookup
+from app.services import float_lookup, scanner_status
 from app.services.catalyst import classify_catalyst
 from app.strategies.small_account_pullback import SmallAccountPullbackStrategy
 
@@ -74,6 +74,14 @@ class MarketScanner:
         if not clean_symbols:
             return ScannerResponse(results=[])
 
+        scanner_status.start(self.user_id, phase="scoring")
+        try:
+            return self._scan(clean_symbols)
+        except Exception as exc:
+            scanner_status.fail(self.user_id, str(exc))
+            raise
+
+    def _scan(self, clean_symbols: list[str]) -> ScannerResponse:
         broker = self._broker()
         # Offset past Alpaca's free-tier SIP recency restriction (see
         # SIP_RECENCY_BUFFER_MINUTES) - session_progress is computed against this SAME
@@ -87,7 +95,15 @@ class MarketScanner:
         session_progress = _session_progress_fraction(end)
         results: list[ScannerResult] = []
 
-        for symbol in clean_symbols:
+        for index, symbol in enumerate(clean_symbols):
+            scanner_status.update(
+                self.user_id,
+                phase="scoring",
+                detail=symbol,
+                done=index + 1,
+                total=len(clean_symbols),
+                found=sum(1 for r in results if r.score >= 4),
+            )
             symbol_bars = list(bars.data.get(symbol, []))
             if len(symbol_bars) < 2:
                 continue
@@ -173,7 +189,9 @@ class MarketScanner:
             )
 
         results.sort(key=lambda item: (item.score, item.percent_change, item.total_volume), reverse=True)
-        return ScannerResponse(results=results, scanned_count=len(clean_symbols))
+        response = ScannerResponse(results=results, scanned_count=len(clean_symbols))
+        scanner_status.finish(self.user_id, results=response.results, scanned_count=response.scanned_count)
+        return response
 
     def scan_universe(self, limit: int = 25, max_symbols: int = 250) -> ScannerResponse:
         """Three candidate sources, merged every cycle:
@@ -190,12 +208,21 @@ class MarketScanner:
         The full scan (quotes, news, float lookups) then runs only on this merged
         shortlist - the sweep does its filtering on nothing but bar math, so covering
         the whole market stays cheap."""
-        symbols = self.load_universe()[: max(1, min(max_symbols, 1000))]
-        sweep_hits, swept_count = self.full_market_sweep()
-        merged = sorted(set(symbols) | self.todays_gainers() | sweep_hits)
-        response = self.scan(merged)
-        ranked = response.results[: max(1, min(limit, 100))]
-        return ScannerResponse(results=ranked, scanned_count=response.scanned_count, swept_count=swept_count)
+        scanner_status.start(self.user_id, phase="sweeping")
+        try:
+            symbols = self.load_universe()[: max(1, min(max_symbols, 1000))]
+            sweep_hits, swept_count = self.full_market_sweep()
+            merged = sorted(set(symbols) | self.todays_gainers() | sweep_hits)
+            response = self.scan(merged)  # scan() reports its own "scoring" progress and calls finish()
+            ranked = response.results[: max(1, min(limit, 100))]
+            final = ScannerResponse(results=ranked, scanned_count=response.scanned_count, swept_count=swept_count)
+            # Overwrite scan()'s finish() with the truncated top-N + swept_count, which
+            # only this method knows - what the caller actually gets back.
+            scanner_status.finish(self.user_id, results=final.results, scanned_count=final.scanned_count, swept_count=swept_count)
+            return final
+        except Exception as exc:
+            scanner_status.fail(self.user_id, str(exc))
+            raise
 
     def realtime_gap_candidates(self) -> list[StockCandidate]:
         """The Ross lane: a LIVE gap scan of the whole market with zero data lag,
@@ -353,6 +380,14 @@ class MarketScanner:
         swept = 0
         for i in range(0, len(symbols), SWEEP_CHUNK_SIZE):
             chunk = symbols[i : i + SWEEP_CHUNK_SIZE]
+            scanner_status.update(
+                self.user_id,
+                phase="sweeping",
+                detail=f"{chunk[0]}…{chunk[-1]}",
+                done=min(i + len(chunk), len(symbols)),
+                total=len(symbols),
+                found=len(hits),
+            )
             try:
                 bars = broker.daily_bars(chunk, start=start, end=end)
             except Exception:

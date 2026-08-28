@@ -136,6 +136,21 @@ class ScannerResponse(BaseModel):
     swept_count: int = 0
 
 
+class ScannerStatusResponse(BaseModel):
+    scanning: bool = False
+    # "idle" | "sweeping" (whole-market chunk pass) | "scoring" (full per-symbol pass)
+    phase: str = "idle"
+    detail: str = ""  # current chunk range or symbol being worked on, or a failure message
+    progress_done: int = 0
+    progress_total: int = 0
+    found: int = 0  # qualifying (score >= 4) candidates found so far this run
+    started_at: float | None = None
+    finished_at: float | None = None
+    results: list[ScannerResult] = []
+    scanned_count: int = 0
+    swept_count: int = 0
+
+
 class AppSettingsResponse(BaseModel):
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""

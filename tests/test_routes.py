@@ -370,3 +370,29 @@ def test_settings_post_needs_no_confirmation_while_staying_paper():
     response = client.post("/api/settings", json=payload)
 
     assert response.status_code == 200
+
+
+def test_scanner_status_is_idle_by_default():
+    response = client.get("/api/scanner/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scanning"] is False
+    assert body["phase"] == "idle"
+    assert body["results"] == []
+
+
+def test_scanner_status_reflects_a_failed_scan_without_getting_stuck_scanning():
+    """No Alpaca credentials saved in this test's isolated DB, so the scan fails
+    immediately - the status endpoint should show that failure, not leave
+    `scanning: true` stuck forever (which is what a poller would see if the
+    in-progress state was never cleared on an error path)."""
+    scan_response = client.post("/api/scanner", json={"symbols": ["AAPL"]})
+    assert scan_response.status_code == 400  # BrokerUnavailable - no credentials configured
+
+    status_response = client.get("/api/scanner/status")
+
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["scanning"] is False
+    assert body["detail"]  # carries the failure reason

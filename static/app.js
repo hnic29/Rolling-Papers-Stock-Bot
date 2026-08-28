@@ -1825,14 +1825,25 @@ function hideChartTooltip() {
   if (chartState) renderChart();
 }
 
+// Tracks the previous render's score/price/change per symbol so a re-render (from
+// the status poll below, or a fresh scan) can flash whichever rows actually moved -
+// "I like to see the movement", not just a table that silently replaces itself.
+let lastScannerBySymbol = {};
+
 function renderScanner(results) {
   const body = document.querySelector("#scanner-results");
   if (!results.length) {
     body.innerHTML = `<tr><td colspan="9">No candidates found</td></tr>`;
+    lastScannerBySymbol = {};
     return;
   }
-  body.innerHTML = results.map((result) => `
-    <tr title="${escapeHtml([...result.reasons, result.news_headline].filter(Boolean).join(" | "))}">
+  const nextBySymbol = {};
+  body.innerHTML = results.map((result) => {
+    const prev = lastScannerBySymbol[result.symbol];
+    const moved = !prev || prev.score !== result.score || prev.price !== result.price || prev.percent_change !== result.percent_change;
+    nextBySymbol[result.symbol] = { score: result.score, price: result.price, percent_change: result.percent_change };
+    return `
+    <tr class="${moved ? "scanner-row-flash" : ""}" title="${escapeHtml([...result.reasons, result.news_headline].filter(Boolean).join(" | "))}">
       <td>${escapeHtml(result.symbol)}</td>
       <td>$${Number(result.price).toFixed(2)}</td>
       <td class="${result.percent_change >= 0 ? "up" : "down"}">${Number(result.percent_change).toFixed(2)}%</td>
@@ -1843,7 +1854,63 @@ function renderScanner(results) {
       <td>${result.score}/5</td>
       <td>${escapeHtml(result.signal)}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
+  lastScannerBySymbol = nextBySymbol;
+}
+
+// Live status strip: polls the cheap in-memory /api/scanner/status snapshot so the
+// dashboard shows what the scanner is actually doing right now - which chunk of the
+// market it's sweeping, which symbol it's scoring, how many qualifying candidates
+// found so far - whether that scan was triggered by clicking Auto Scan, by the
+// "Keep scanning live" toggle below, or by the automation loop's own periodic scan
+// while auto-trading is on. Also keeps the results table updated between manual
+// scans, so background activity is visible without the user doing anything.
+let scannerAutoScanId = null;
+
+function renderScannerStatus(status) {
+  const text = document.querySelector("#scanner-status-text");
+  const barWrap = document.querySelector("#scanner-status-bar");
+  const fill = document.querySelector("#scanner-status-fill");
+
+  if (status.scanning) {
+    const phaseLabel = status.phase === "sweeping" ? "Sweeping the whole market" : "Scoring shortlist";
+    const counts = status.progress_total ? ` (${status.progress_done.toLocaleString()} / ${status.progress_total.toLocaleString()})` : "";
+    const foundNote = status.found ? ` — ${status.found} qualifying so far` : "";
+    text.textContent = `Scanning — ${phaseLabel}${counts}: ${status.detail}${foundNote}`;
+    barWrap.hidden = !status.progress_total;
+    fill.style.width = status.progress_total ? `${Math.min(100, (status.progress_done / status.progress_total) * 100)}%` : "0%";
+  } else {
+    barWrap.hidden = true;
+    if (status.detail) {
+      text.textContent = `Scan failed: ${status.detail}`;
+    } else if (status.finished_at) {
+      const when = new Date(status.finished_at * 1000).toLocaleTimeString();
+      const sweptNote = status.swept_count ? `, ${status.swept_count.toLocaleString()} swept` : "";
+      text.textContent = `Idle — last scanned ${when} (${status.scanned_count} symbols evaluated${sweptNote}, ${status.results.length} candidates)`;
+    } else {
+      text.textContent = "No scan yet — click Auto Scan, or turn on Keep scanning live.";
+    }
+  }
+
+  if (status.results.length) renderScanner(status.results);
+}
+
+async function pollScannerStatus() {
+  const status = await api("/api/scanner/status");
+  renderScannerStatus(status);
+}
+
+function toggleScannerLive(event) {
+  if (event.target.checked) {
+    autoScan().catch((error) => (document.querySelector("#message").textContent = error.message));
+    scannerAutoScanId = setInterval(() => {
+      autoScan().catch((error) => (document.querySelector("#message").textContent = error.message));
+    }, SCANNER_AUTO_SCAN_INTERVAL_MS);
+  } else if (scannerAutoScanId) {
+    clearInterval(scannerAutoScanId);
+    scannerAutoScanId = null;
+  }
 }
 
 function compactNumber(value) {
@@ -2845,15 +2912,28 @@ refreshTradeHistory().catch((error) => {
   document.querySelector("#message").textContent = error.message;
 });
 
-// Live-data panels poll every 20s (paused while the tab is hidden). The chart and
-// scanner deliberately don't auto-refresh: reloading the chart would reset zoom/pan/
-// in-progress drawings, and the scanner is an on-demand research tool, not a feed.
+// Live-data panels poll every 20s (paused while the tab is hidden). The chart
+// deliberately doesn't auto-refresh: reloading it would reset zoom/pan/in-progress
+// drawings. The scanner status strip below polls much faster (2s) since it's just
+// reading cheap in-memory progress state, not triggering new scans.
 const LIVE_REFRESH_INTERVAL_MS = 20000;
 startAutoRefresh(refresh, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPositions, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshBankroll, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(refreshPerformance, LIVE_REFRESH_INTERVAL_MS);
 startAutoRefresh(() => refreshQuote(getTickerSymbol()), LIVE_REFRESH_INTERVAL_MS);
+
+// Cheap (in-memory, no new API calls) progress polling so scanning - whether
+// triggered manually, by "Keep scanning live" below, or by the automation loop's
+// own periodic scan - is always visible while it happens.
+const SCANNER_STATUS_POLL_INTERVAL_MS = 2000;
+startAutoRefresh(pollScannerStatus, SCANNER_STATUS_POLL_INTERVAL_MS);
+
+// Re-triggers an actual Auto Scan (real Alpaca API calls) on this cadence while
+// "Keep scanning live" is checked - a minute matches the automation loop's own
+// default cycle length, comfortably inside Alpaca's free-tier rate limit.
+const SCANNER_AUTO_SCAN_INTERVAL_MS = 60000;
+document.querySelector("#scanner-live-toggle").addEventListener("change", toggleScannerLive);
 
 // Trade history sync is heavier than the other polls above — it makes one Alpaca
 // call per still-open order to check for fills/exits — so it runs on a slower cadence.

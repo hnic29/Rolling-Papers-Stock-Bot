@@ -814,6 +814,63 @@ form {
   margin-bottom: 18px;
 }
 
+.scanner-form .check-row {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.scanner-status {
+  align-items: center;
+  color: #a8b9c8;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 10px;
+  margin: -6px 0 14px;
+}
+
+.scanner-status-bar {
+  background: rgba(190, 213, 230, 0.14);
+  border-radius: 3px;
+  flex: 1;
+  height: 6px;
+  min-width: 120px;
+  overflow: hidden;
+}
+
+.scanner-status-bar[hidden] {
+  display: none;
+}
+
+#scanner-status-fill {
+  background: #7cf0b3;
+  height: 100%;
+  transition: width 0.4s ease;
+  width: 0;
+}
+
+@keyframes scanner-row-flash {
+  0% {
+    background: rgba(124, 240, 179, 0.22);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.scanner-row-flash {
+  animation: scanner-row-flash 1.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scanner-row-flash {
+    animation: none;
+  }
+  #scanner-status-fill {
+    transition: none;
+  }
+}
+
 .ticker,
 .performance-summary {
   display: grid;

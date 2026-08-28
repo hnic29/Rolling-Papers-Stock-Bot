@@ -27,12 +27,13 @@ from app.models import (
     LoginRequest,
     ResetPasswordRequest,
     ScannerRequest,
+    ScannerStatusResponse,
     TradeRequest,
     UserListItem,
     UserPublic,
 )
 from app.paths import resource_path
-from app.services import bankroll, bot_registry, credentials, notify, trade_log, trade_sync, users
+from app.services import bankroll, bot_registry, credentials, notify, scanner_status, trade_log, trade_sync, users
 from app.services.backtest import run_daily_backtest
 from app.services.env_file import mask_secret
 from app.services.finnhub_live import stream_trades
@@ -468,6 +469,15 @@ def scan_market_universe(body: AutoScannerRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not scan market universe: {exc}") from exc
+
+
+@app.get("/api/scanner/status", response_model=ScannerStatusResponse)
+def scanner_status_route(request: Request):
+    """Cheap, poll-friendly view into scanner_status's in-memory state - lets the
+    dashboard show live progress while a scan (manual or the automation loop's own
+    periodic scan_universe() call) is running, and keeps the last completed results
+    on hand between scans."""
+    return scanner_status.snapshot(request.state.user_id)
 
 
 @app.get("/api/account")

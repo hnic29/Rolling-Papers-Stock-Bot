@@ -1,7 +1,7 @@
 import pytest
 
 from app.config import settings
-from app.services import bot_registry, trade_log
+from app.services import bot_registry, scanner_status, trade_log
 
 
 @pytest.fixture(autouse=True)
@@ -42,3 +42,12 @@ def _isolated_bot_registry(monkeypatch):
     test's isolated DB_PATH/tmp_path would leak into the next test entirely by
     accident, since get_bot() would just return the cached (stale) instance."""
     monkeypatch.setattr(bot_registry, "_bots", {})
+
+
+@pytest.fixture(autouse=True)
+def _isolated_scanner_status(monkeypatch):
+    """Same reasoning as _isolated_bot_registry above - app.services.scanner_status
+    keeps its per-user progress/results snapshot in a module-level dict, so without
+    resetting it a scan from one test would leak into the next test's assertions
+    about the same user_id (every route test authenticates as user_id 1)."""
+    monkeypatch.setattr(scanner_status, "_status", {})
